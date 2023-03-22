@@ -21,16 +21,15 @@ package groovy.transform.stc
 import org.junit.Test
 
 import static groovy.test.GroovyAssert.assertScript
-import static groovy.test.GroovyAssert.isAtLeastJdk
 import static groovy.test.GroovyAssert.shouldFail
 
 final class MethodReferenceTest {
 
     private final GroovyShell shell = GroovyShell.withConfig {
         imports {
-            normal 'groovy.transform.CompileStatic'
-            normal 'java.util.stream.Collectors'
+            star 'groovy.transform'
             star 'java.util.function'
+            normal 'java.util.stream.Collectors'
         }
     }
 
@@ -38,12 +37,12 @@ final class MethodReferenceTest {
     void testFunctionCI() {
         assertScript shell, '''
             @CompileStatic
-            void p() {
+            void test() {
                 def result = [1, 2, 3].stream().map(Object::toString).collect(Collectors.toList())
                 assert result == ['1', '2', '3']
             }
 
-            p()
+            test()
         '''
     }
 
@@ -51,12 +50,12 @@ final class MethodReferenceTest {
     void testFunctionCI2() {
         assertScript shell, '''
             @CompileStatic
-            void p() {
+            void test() {
                 def result = [1, 2, 3].stream().map(Integer::toString).collect(Collectors.toList())
                 assert result == ['1', '2', '3']
             }
 
-            p()
+            test()
         '''
     }
 
@@ -64,26 +63,26 @@ final class MethodReferenceTest {
     void testFunctionCI3() {
         assertScript shell, '''
             @CompileStatic
-            void p() {
+            void test() {
                 List<String> list = ['a','bc','def']
                 Function<String,String> self = str -> str // help for toMap
-                def map = list.stream().collect(Collectors.toMap(self, String::length))
-                assert map == [a: 1, bc: 2, 'def': 3]
+                def result = list.stream().collect(Collectors.toMap(self, String::length))
+                assert result == [a: 1, bc: 2, 'def': 3]
             }
 
-            p()
+            test()
         '''
 
         assertScript shell, '''
             @CompileStatic
-            void p() {
+            void test() {
                 List<String> list = ['a','bc','def']
                 // TODO: inference for T in toMap(Function<? super T,...>, Function<? super T,...>)
-                def map = list.stream().collect(Collectors.toMap(Function.<String>identity(), String::length))
-                assert map == [a: 1, bc: 2, 'def': 3]
+                def result = list.stream().collect(Collectors.toMap(Function.<String>identity(), String::length))
+                assert result == [a: 1, bc: 2, 'def': 3]
             }
 
-            p()
+            test()
         '''
     }
 
@@ -91,11 +90,9 @@ final class MethodReferenceTest {
     void testFunctionCI4() {
         def err = shouldFail shell, '''
             @CompileStatic
-            void p() {
-                def result = [1, 2, 3].stream().map(String::toString).collect(Collectors.toList())
+            void test() {
+                [1, 2, 3].stream().map(String::toString).collect(Collectors.toList())
             }
-
-            p()
         '''
         assert err =~ /Invalid receiver type: java.lang.Integer is not compatible with java.lang.String/
     }
@@ -103,13 +100,11 @@ final class MethodReferenceTest {
     @Test // class::instanceMethod -- GROOVY-9814
     void testFunctionCI5() {
         assertScript shell, '''
-            @CompileStatic
             class One { String id }
 
-            @CompileStatic
             class Two extends One { }
 
-            @CompileStatic @groovy.transform.Immutable(knownImmutableClasses=[Function])
+            @CompileStatic @Immutable(knownImmutableClasses=[Function])
             class FunctionHolder<T> {
                 Function<T, ?> extractor
 
@@ -168,6 +163,7 @@ final class MethodReferenceTest {
                 int size = f.applyAsInt("")
                 assert size == 0
             }
+
             test()
         '''
 
@@ -178,6 +174,7 @@ final class MethodReferenceTest {
                 int length = f.applyAsInt("")
                 assert length == 0
             }
+
             test()
         '''
 
@@ -188,6 +185,7 @@ final class MethodReferenceTest {
                 Integer length = f.apply("")
                 assert length == 0
             }
+
             test()
         '''
 
@@ -200,10 +198,9 @@ final class MethodReferenceTest {
                 IntStream chars = f.apply("")
                 assert chars.count() == 0
             }
+
             test()
         '''
-
-        if (!isAtLeastJdk('11.0')) return
 
         assertScript shell, '''
             @CompileStatic
@@ -212,22 +209,23 @@ final class MethodReferenceTest {
                 int result = f.applyAsInt("","")
                 assert result == 0
             }
+
             test()
         '''
     }
 
-    @Test // class::instanceMethod -- GROOVY-10734
+    @Test // class::instanceMethod -- GROOVY-10054, GROOVY-10734
     void testFunctionCI8() {
         assertScript shell, '''
             class C {
                 String p
             }
+
             @CompileStatic
             Map test(Collection<C> items) {
-                items.stream().collect(
-                    Collectors.groupingBy(C::getP) // Failed to find the expected method[getP(Object)] in the type[C]
-                )
+                items.stream().collect(Collectors.groupingBy(C::getP))
             }
+
             def map = test([new C(p:'foo'), new C(p:'bar'), new C(p:'foo')])
             assert map.foo.size() == 2
             assert map.bar.size() == 1
@@ -242,6 +240,7 @@ final class MethodReferenceTest {
                 strings.removeIf(String::isEmpty)
                 assert strings.isEmpty()
             }
+
             test()
         '''
     }
@@ -254,6 +253,7 @@ final class MethodReferenceTest {
                 BiConsumer<List<T>, Consumer<? super T>> binder = List::forEach // default method of Iterator
                 binder.accept(list, todo)
             }
+
             test(['works']) { assert it == 'works' }
         '''
     }
@@ -264,8 +264,24 @@ final class MethodReferenceTest {
             @CompileStatic
             void test() {
                 def result = [1.0G, 2.0G, 3.0G].stream().reduce(0.0G, BigDecimal::add)
-                assert 6.0G == result
+                assert result == 6.0G
             }
+
+            test()
+        '''
+    }
+
+    @Test // instance::instanceMethod -- GROOVY-10933
+    void testConsumerII() {
+        assertScript shell, '''
+            @CompileStatic
+            void test() {
+                List<String> strings = []
+                Optional.of('string')
+                    .ifPresent(strings::add)
+                assert strings.contains('string')
+            }
+
             test()
         '''
     }
@@ -285,6 +301,7 @@ final class MethodReferenceTest {
                 def list = zero.get()
                 assert list.isEmpty()
             }
+
             test()
         '''
 
@@ -296,6 +313,7 @@ final class MethodReferenceTest {
                 assert list.size() == 1
                 assert list[0] == 1
             }
+
             test()
         '''
 
@@ -308,6 +326,7 @@ final class MethodReferenceTest {
                 assert list[0] == 2
                 assert list[1] == 3
             }
+
             test()
         '''
 
@@ -320,6 +339,7 @@ final class MethodReferenceTest {
                 assert list[0] == 2
                 assert list[1] == 3
             }
+
             test()
         '''
     }
@@ -332,6 +352,7 @@ final class MethodReferenceTest {
                     [this,*args]
                 }
             }
+
             @CompileStatic
             void test(C c) {
                 BiFunction<Integer, Integer, List> two = c::m
@@ -341,11 +362,12 @@ final class MethodReferenceTest {
                 assert list[1] == 1
                 assert list[2] == 2
             }
+
             test(new C())
         '''
     }
 
-    @Test // instance::instanceMethod (DGM) -- GROOVY-10653
+    @Test // instance::instanceGroovyMethod -- GROOVY-10653
     void testFunctionII3() {
         assertScript shell, '''
             @CompileStatic
@@ -353,6 +375,7 @@ final class MethodReferenceTest {
                 IntSupplier sizing = chars::size // from StringGroovyMethods
                 return sizing.getAsInt()
             }
+
             int size = test("foo")
             assert size == 3
         '''
@@ -389,73 +412,65 @@ final class MethodReferenceTest {
     @Test // instance::instanceMethod
     void testBinaryOperatorII() {
         assertScript shell, '''
-            @CompileStatic
-            void p() {
-                Adder adder = new Adder()
-                def result = [1.0G, 2.0G, 3.0G].stream().reduce(0.0G, adder::add)
-                assert 6.0G == result
-            }
-
-            p()
-
             class Adder {
                 BigDecimal add(BigDecimal a, BigDecimal b) {
                     a.add(b)
                 }
             }
+
+            @CompileStatic
+            void test() {
+                Adder adder = new Adder()
+                def result = [1.0G, 2.0G, 3.0G].stream().reduce(0.0G, adder::add)
+                assert result == 6.0G
+            }
+
+            test()
         '''
     }
 
     @Test // instance::instanceMethod
     void testBinaryOperatorII_COMPATIBLE() {
         assertScript shell, '''
-            @CompileStatic
-            void p() {
-                Adder adder = new Adder()
-                def result = [1.0G, 2.0G, 3.0G].stream().reduce(0.0G, adder::add)
-                assert 6.0G == result
-            }
-
-            p()
-
             class Adder {
                 BigDecimal add(Number a, Number b) {
                     ((BigDecimal) a).add((BigDecimal) b)
                 }
             }
+
+            @CompileStatic
+            void test() {
+                Adder adder = new Adder()
+                def result = [1.0G, 2.0G, 3.0G].stream().reduce(0.0G, adder::add)
+                assert result == 6.0G
+            }
+
+            test()
         '''
     }
 
     @Test // expression::instanceMethod
     void testBinaryOperatorII_EXPRESSION() {
         assertScript shell, '''
-            @CompileStatic
-            void p() {
-                def result = [1.0G, 2.0G, 3.0G].stream().reduce(0.0G, new Adder()::add)
-                assert 6.0G == result
-            }
-
-            p()
-
             class Adder {
                 public BigDecimal add(BigDecimal a, BigDecimal b) {
                     a.add(b)
                 }
             }
+
+            @CompileStatic
+            void test() {
+                def result = [1.0G, 2.0G, 3.0G].stream().reduce(0.0G, new Adder()::add)
+                assert result == 6.0G
+            }
+
+            test()
         '''
     }
 
     @Test // expression::instanceMethod
     void testBinaryOperatorII_EXPRESSION2() {
         assertScript shell, '''
-            @CompileStatic
-            void p() {
-                def result = [1.0G, 2.0G, 3.0G].stream().reduce(0.0G, new Adder().getThis()::add)
-                assert new BigDecimal(6) == result
-            }
-
-            p()
-
             class Adder {
                 BigDecimal add(BigDecimal a, BigDecimal b) {
                     a.add(b)
@@ -465,100 +480,100 @@ final class MethodReferenceTest {
                     return this
                 }
             }
+
+            @CompileStatic
+            void test() {
+                def result = [1.0G, 2.0G, 3.0G].stream().reduce(0.0G, new Adder().getThis()::add)
+                assert result == new BigDecimal(6)
+            }
+
+            test()
         '''
     }
 
     @Test // instance::instanceMethod
     void testBinaryOperatorII_RHS() {
         assertScript shell, '''
-            @CompileStatic
-            void p() {
-                Adder adder = new Adder()
-                BinaryOperator<BigDecimal> b = adder::add
-                def result = [1.0G, 2.0G, 3.0G].stream().reduce(0.0G, b)
-                assert 6.0G == result
-            }
-
-            p()
-
             class Adder {
                 BigDecimal add(BigDecimal a, BigDecimal b) {
                     a.add(b)
                 }
             }
+
+            @CompileStatic
+            void test() {
+                Adder adder = new Adder()
+                BinaryOperator<BigDecimal> b = adder::add
+                def result = [1.0G, 2.0G, 3.0G].stream().reduce(0.0G, b)
+                assert result == 6.0G
+            }
+
+            test()
         '''
     }
 
     @Test // expression::instanceMethod
     void testBinaryOperatorII_RHS2() {
         assertScript shell, '''
-            @CompileStatic
-            void p() {
-                BinaryOperator<BigDecimal> b = new Adder()::add
-                def result = [1.0G, 2.0G, 3.0G].stream().reduce(0.0G, b)
-                assert 6.0G == result
-            }
-
-            p()
-
             class Adder {
                 BigDecimal add(BigDecimal a, BigDecimal b) {
                     a.add(b)
                 }
             }
+
+            @CompileStatic
+            void test() {
+                BinaryOperator<BigDecimal> b = new Adder()::add
+                def result = [1.0G, 2.0G, 3.0G].stream().reduce(0.0G, b)
+                assert result == 6.0G
+            }
+
+            test()
         '''
     }
 
     @Test // instance::staticMethod
     void testBinaryOperatorIS() {
         assertScript shell, '''
-            @CompileStatic
-            void p() {
-                Adder adder = new Adder()
-                def result = [1.0G, 2.0G, 3.0G].stream().reduce(0.0G, adder::add)
-                assert 6.0G == result
-            }
-
-            p()
-
             class Adder {
                 static BigDecimal add(BigDecimal a, BigDecimal b) {
                     a.add(b)
                 }
             }
+
+            @CompileStatic
+            void test() {
+                Adder adder = new Adder()
+                def result = [1.0G, 2.0G, 3.0G].stream().reduce(0.0G, adder::add)
+                assert result == 6.0G
+            }
+
+            test()
         '''
     }
 
     @Test // expression::staticMethod
     void testBinaryOperatorIS_EXPRESSION() {
         assertScript shell, '''
-            @CompileStatic
-            void p() {
-                def result = [1.0G, 2.0G, 3.0G].stream().reduce(0.0G, new Adder()::add)
-                assert 6.0G == result
-            }
-
-            p()
-
             class Adder {
                 static BigDecimal add(BigDecimal a, BigDecimal b) {
                     a.add(b)
                 }
             }
+
+            @CompileStatic
+            void test() {
+                def result = [1.0G, 2.0G, 3.0G].stream().reduce(0.0G, new Adder()::add)
+                assert result == 6.0G
+            }
+
+            test()
         '''
     }
 
     @Test // expression::staticMethod
     void testBinaryOperatorIS_EXPRESSION2() {
         assertScript shell, '''
-            @CompileStatic
-            void p() {
-                def result = [1.0G, 2.0G, 3.0G].stream().reduce(0.0G, Adder.newInstance()::add)
-                assert 6.0G == result
-            }
-
-            p()
-
             class Adder {
                 static BigDecimal add(BigDecimal a, BigDecimal b) {
                     a.add(b)
@@ -568,19 +583,27 @@ final class MethodReferenceTest {
                     new Adder()
                 }
             }
+
+            @CompileStatic
+            void test() {
+                def result = [1.0G, 2.0G, 3.0G].stream().reduce(0.0G, Adder.newInstance()::add)
+                assert result == 6.0G
+            }
+
+            test()
         '''
     }
 
-    @Test // arrayClass::new
+    @Test // class::new
     void testFunctionCN() {
         assertScript shell, '''
             @CompileStatic
-            void p() {
-                def result = [1, 2, 3].stream().toArray(Integer[]::new)
-                assert result == new Integer[] { 1, 2, 3 }
+            void test() {
+                def result = ["1", "2", "3"].stream().map(Integer::new).collect(Collectors.toList())
+                assert result == [1, 2, 3]
             }
 
-            p()
+            test()
         '''
     }
 
@@ -588,12 +611,13 @@ final class MethodReferenceTest {
     void testFunctionCN2() {
         assertScript shell, '''
             @CompileStatic
-            void p() {
-                def result = ["1", "2", "3"].stream().map(Integer::new).collect(Collectors.toList())
+            void test() {
+                Function<String, Integer> f = Integer::new // deprcated; parseInt/valueOf
+                def result = ["1", "2", "3"].stream().map(f).collect(Collectors.toList())
                 assert result == [1, 2, 3]
             }
 
-            p()
+            test()
         '''
     }
 
@@ -610,6 +634,7 @@ final class MethodReferenceTest {
                     new C(Integer::new)
                 }
             }
+
             C.test()
         '''
     }
@@ -630,43 +655,46 @@ final class MethodReferenceTest {
             }
             @CompileStatic
             class X extends A {
-              public X() {
-                super(Y::new)
-              }
-              private static class Y extends B {
-                Y(A a) {
-                  super(a)
+                public X() {
+                    super(Y::new)
                 }
-              }
+                private static class Y extends B {
+                    Y(A a) {
+                      super(a)
+                    }
+                }
             }
 
             new X()
         '''
     }
 
-    @Test // class::new
+    @Test // class::new -- GROOVY-10930
     void testFunctionCN5() {
-        assertScript shell, '''
+        def err = shouldFail shell, '''
+            def <X> void m(Function<String,X> fn) { }
+            class Bar { }
             @CompileStatic
-            void p() {
-                Function<String, Integer> f = Integer::new
-                assert [1, 2, 3] == ["1", "2", "3"].stream().map(f).collect(Collectors.toList())
+            void test() {
+                m(Bar::new) // ctor does not accept String
             }
 
-            p()
+            test()
         '''
+        assert err =~ /Cannot find matching constructor Bar\(java.lang.String\)/
     }
 
     @Test // arrayClass::new
-    void testIntFunctionCN6() {
+    void testIntFunctionCN() {
         assertScript shell, '''
             @CompileStatic
-            void p() {
-                IntFunction<Integer[]> f = Integer[]::new
-                assert new Integer[] { 1, 2, 3 } == [1, 2, 3].stream().toArray(f)
+            void test() {
+                IntFunction<Integer[]> f = Integer[]::new;
+                def result = [1, 2, 3].stream().toArray(f)
+                result == new Integer[] {1, 2, 3}
             }
 
-            p()
+            test()
         '''
     }
 
@@ -674,12 +702,12 @@ final class MethodReferenceTest {
     void testFunctionCS() {
         assertScript shell, '''
             @CompileStatic
-            void p() {
+            void test() {
                 def result = [1, -2, 3].stream().map(Math::abs).collect(Collectors.toList())
                 assert [1, 2, 3] == result
             }
 
-            p()
+            test()
         '''
     }
 
@@ -687,13 +715,13 @@ final class MethodReferenceTest {
     void testFunctionCS2() {
         assertScript shell, '''
             @CompileStatic
-            void p() {
+            void test() {
                 List<String> list = ['x','y','z']
                 def map = list.stream().collect(Collectors.toMap(Function.identity(), Collections::singletonList))
                 assert map == [x: ['x'], y: ['y'], z: ['z']]
             }
 
-            p()
+            test()
         '''
     }
 
@@ -725,12 +753,13 @@ final class MethodReferenceTest {
     void testFunctionCS4() {
         assertScript shell, '''
             @CompileStatic
-            void p() {
+            void test() {
                 Function<Integer, Integer> f = Math::abs
                 def result = [1, -2, 3].stream().map(f).collect(Collectors.toList())
                 assert [1, 2, 3] == result
             }
-            p()
+
+            test()
         '''
     }
 
@@ -738,12 +767,13 @@ final class MethodReferenceTest {
     void testFunctionCS5() {
         assertScript shell, '''
             @CompileStatic
-            void p() {
-                def f = Math::abs // No explicit type defined, so it is actually a method closure. We can make it smarter in a later version.
+            void test() {
+                def f = Math::abs // No explicit type defined, so it is actually a method closure
                 def result = [1, -2, 3].stream().map(f).collect(Collectors.toList())
                 assert [1, 2, 3] == result
             }
-            p()
+
+            test()
         '''
     }
 
@@ -751,87 +781,129 @@ final class MethodReferenceTest {
     void testFunctionCS6() {
         assertScript shell, '''
             @CompileStatic
-            void p() {
+            void test() {
                 Supplier<List> zero = Arrays::asList
                 def list = zero.get()
                 assert list.isEmpty()
             }
-            p()
+
+            test()
         '''
 
         assertScript shell, '''
             @CompileStatic
-            void p() {
+            void test() {
                 Function<Integer, List> one = Arrays::asList
                 def list = one.apply(1)
                 assert list.size() == 1
                 assert list[0] == 1
             }
-            p()
+
+            test()
         '''
 
         assertScript shell, '''
             @CompileStatic
-            void p() {
+            void test() {
                 BiFunction<Integer, Integer, List> two = Arrays::asList
                 def list = two.apply(2,3)
                 assert list.size() == 2
                 assert list[0] == 2
                 assert list[1] == 3
             }
-            p()
+
+            test()
         '''
     }
 
-    @Test // class::instanceMethod, actually class::staticMethod
+    @Test // class::staticMethod -- GROOVY-10807
+    void testFunctionCS7() {
+        assertScript shell, '''
+            @CompileStatic
+            class C {
+                public static Comparator<String> c = Comparator.<String,String>comparing(C::m)
+                static String m(String string) {
+                    return string
+                }
+            }
+
+            List<String> list = ['foo','bar','baz']
+            list.sort(C.c)
+
+            assert list == ['bar','baz','foo']
+        '''
+    }
+
+    @Test // class::staticMethod -- GROOVY-10807
+    void testFunctionCS8() {
+        assertScript shell, '''
+            @CompileStatic
+            class C {
+                public static Comparator<String> c = Comparator.comparing(C::m)
+                static String m(String string) {
+                    return string
+                }
+            }
+
+            List<String> list = ['foo','bar','baz']
+            list.sort(C.c)
+
+            assert list == ['bar','baz','foo']
+        '''
+    }
+
+    @Test // class::instanceGroovyMethod
     void testFunctionCI_DGM() {
         assertScript shell, '''
             @CompileStatic
-            void p() {
+            void test() {
                 def result = ['a', 'ab', 'abc'].stream().map(String::size).collect(Collectors.toList())
-                assert [1, 2, 3] == result
+                assert result == [1, 2, 3]
             }
-            p()
+
+            test()
         '''
     }
 
-    @Test // class::staticMethod
+    @Test // class::staticGroovyMethod
     void testFunctionCS_DGSM() {
         assertScript shell, '''
             @CompileStatic
-            void p() {
+            void test() {
                 def result = [{}, {}, {}].stream().map(Thread::startDaemon).collect(Collectors.toList())
-                assert result.every(e -> e instanceof Thread)
+                assert result.every { it instanceof Thread }
             }
-            p()
+
+            test()
         '''
     }
 
-    @Test // class::instanceMethod
+    @Test // class::instanceGroovyMethod
     void testFunctionCI_SHADOW_DGM() {
         assertScript shell, '''
             @CompileStatic
-            void p() {
+            void test() {
                 def result = [[a:1], [b:2], [c:3]].stream().map(Object::toString).collect(Collectors.toList())
-                assert 3 == result.size()
-                assert ['[a:1]', '[b:2]', '[c:3]'] == result
+                assert result == ['[a:1]', '[b:2]', '[c:3]']
             }
-            p()
+
+            test()
         '''
     }
 
-    @Test // class::staticMethod
+    @Test // class::staticGroovyMethod
     void testFunctionCS_MULTI_DGSM() {
         assertScript shell, '''
             @CompileStatic
-            void p() {
+            void test() {
                 def result = [{}, {}, {}].stream().map(Thread::startDaemon).collect(Collectors.toList())
-                assert result.every(e -> e instanceof Thread)
+                assert result.every { it instanceof Thread }
 
                 result = [{}, {}, {}].stream().map(Thread::startDaemon).collect(Collectors.toList())
-                assert result.every(e -> e instanceof Thread)
+                assert result.every { it instanceof Thread }
             }
-            p()
+
+            test()
         '''
     }
 
@@ -839,58 +911,114 @@ final class MethodReferenceTest {
     void testMethodNotFound1() {
         def err = shouldFail shell, '''
             @CompileStatic
-            void p() {
+            void test() {
                 [1.0G, 2.0G, 3.0G].stream().reduce(0.0G, BigDecimal::addx)
             }
         '''
-        assert err.message.contains('Failed to find the expected method[addx(java.math.BigDecimal,java.math.BigDecimal)] in the type[java.math.BigDecimal]')
+        assert err.message.contains("Failed to find class method 'addx(java.math.BigDecimal,java.math.BigDecimal)' or instance method 'addx(java.math.BigDecimal)' for the type: java.math.BigDecimal")
     }
 
     @Test // GROOVY-9463
     void testMethodNotFound2() {
         def err = shouldFail shell, '''
             @CompileStatic
-            void p() {
+            void test() {
                 Function<String,String> reference = String::toLowerCaseX
             }
         '''
-        assert err.message.contains('Failed to find the expected method[toLowerCaseX(java.lang.String)] in the type[java.lang.String]')
+        assert err.message.contains("Failed to find class method 'toLowerCaseX(java.lang.String)' or instance method 'toLowerCaseX()' for the type: java.lang.String")
     }
 
-    @Test // GROOVY-10714
+    @Test // GROOVY-10813, GROOVY-10858
     void testMethodSelection() {
+        for (spec in ['', '<?>', '<Object>', '<? extends Object>', '<? super String>']) {
+            assertScript shell, """
+                @CompileStatic
+                void test() {
+                    Consumer$spec c = this::print // overloads in Script and DefaultGroovyMethods
+                    c.accept('hello world!')
+                }
+
+                test()
+            """
+        }
+        for (spec in ['', '<?,?>', '<?,Object>', '<?,? extends Object>', '<?,? super String>']) {
+            assertScript shell, """
+                @CompileStatic
+                void test() {
+                    BiConsumer$spec c = Object::print
+                    c.accept(this, 'hello world!')
+                }
+
+                test()
+            """
+        }
         assertScript shell, '''
-            class C {
-                String which
-                void m(int i) { which = 'int' }
-                void m(Number n) { which = 'Number' }
-            }
-            interface I {
-                I andThen(Consumer<? super Number> c)
-                I andThen(BiConsumer<? super Number, ?> bc)
-            }
             @CompileStatic
-            void test(I i, C c) {
-                i = i.andThen(c::m) // "andThen" is ambiguous unless parameters of "m" overloads are taken into account
+            void test() {
+                BiConsumer<Script,?> c = Script::print
+                c.accept(this, 'hello world!')
             }
 
-            C x= new C()
-            test(new I() {
-                I andThen(Consumer<? super Number> c) {
-                    c.accept(42)
-                    return this
-                }
-                I andThen(BiConsumer<? super Number, ?> bc) {
-                    bc.accept(42, null)
-                    return this
-                }
-            }, x)
-            assert x.which == 'Number'
+            test()
         '''
+        assertScript shell, '''
+            @CompileStatic
+            void test() {
+                Supplier<String> s = 'x'::toString
+                def result = s.get()
+                assert result == 'x'
+            }
+
+            test()
+        '''
+        def err = shouldFail shell, '''
+            @CompileStatic
+            void test() {
+                Supplier<String> s = Object::toString // all options require an object
+            }
+        '''
+        assert err.message.contains("Failed to find class method 'toString()' for the type: java.lang.Object")
     }
 
-    @Test // GROOVY-10742
-    void testVoidMethodSelection() {
+    @Test // GROOVY-10859
+    void testDynamicMethodSelection() {
+        for (tag in ['@TypeChecked', '@CompileStatic', '@CompileDynamic']) {
+            assertScript shell, """
+                $tag
+                void test() {
+                    def result = [[]].stream().flatMap(List::stream).toList()
+                    assert result.isEmpty()
+                }
+
+                test()
+            """
+        }
+    }
+
+    @Test // GROOVY-10904
+    void testPropertyMethodLocation() {
+        for (tag in ['@TypeChecked', '@CompileStatic', '@CompileDynamic']) {
+            assertScript shell, """
+                $tag
+                class Test {
+                    static class Profile {
+                        String foo, bar
+                    }
+
+                    Map<String, Profile> profiles = [new Profile()].stream()
+                        .collect(Collectors.toMap(Profile::getFoo, Function.identity()))
+
+                    static main(args) {
+                        assert this.newInstance().getProfiles().size() == 1
+                    }
+                }
+            """
+        }
+    }
+
+    @Test // GROOVY-10742, GROOVY-10858
+    void testIncompatibleReturnType() {
         def err = shouldFail shell, '''
             void foo(bar) {
             }
@@ -900,6 +1028,24 @@ final class MethodReferenceTest {
             }
         '''
         assert err =~ /Invalid return type: void is not convertible to java.lang.String/
+
+        err = shouldFail shell, '''
+            @CompileStatic
+            void test() {
+                Function<Object,Number> f = Object::toString
+            }
+        '''
+        assert err =~ /Invalid return type: java.lang.String is not convertible to java.lang.Number/
+
+        err = shouldFail shell, '''
+            def m(Function<Object,Number> f) {
+            }
+            @CompileStatic
+            void test() {
+                m(Object::toString)
+            }
+        '''
+        assert err =~ /Invalid return type: java.lang.String is not convertible to java.lang.Number/
     }
 
     @Test // GROOVY-10269

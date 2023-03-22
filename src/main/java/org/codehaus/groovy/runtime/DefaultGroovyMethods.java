@@ -98,19 +98,11 @@ import org.codehaus.groovy.tools.RootLoader;
 import org.codehaus.groovy.transform.trait.Traits;
 import org.codehaus.groovy.util.ArrayIterable;
 import org.codehaus.groovy.util.ArrayIterator;
-import org.codehaus.groovy.util.BooleanArrayIterator;
-import org.codehaus.groovy.util.ByteArrayIterator;
-import org.codehaus.groovy.util.CharArrayIterator;
 import org.codehaus.groovy.util.DoubleArrayIterable;
-import org.codehaus.groovy.util.DoubleArrayIterator;
-import org.codehaus.groovy.util.FloatArrayIterator;
 import org.codehaus.groovy.util.IntArrayIterable;
-import org.codehaus.groovy.util.IntArrayIterator;
 import org.codehaus.groovy.util.IteratorBufferedIterator;
 import org.codehaus.groovy.util.ListBufferedIterator;
 import org.codehaus.groovy.util.LongArrayIterable;
-import org.codehaus.groovy.util.LongArrayIterator;
-import org.codehaus.groovy.util.ShortArrayIterator;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -147,6 +139,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.ListIterator;
 import java.util.Map;
+import java.util.NavigableSet;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Queue;
@@ -161,6 +154,7 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
 
 import static groovy.lang.groovydoc.Groovydoc.EMPTY_GROOVYDOC;
 
@@ -2569,7 +2563,29 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      * @since 1.5.2
      */
     public static <T> T[] reverseEach(T[] self, @ClosureParams(FirstParam.Component.class) Closure closure) {
-        each(new ReverseListIterator<>(Arrays.asList(self)), closure);
+        Objects.requireNonNull(self);
+        for (int i = self.length - 1; i >= 0; i--) {
+            closure.call(self[i]);
+        }
+        return self;
+    }
+
+    /**
+     * Iterate over each element of the set in reverse order.
+     * <pre class="groovyTestCase">
+     * TreeSet navSet = [2, 4, 1, 3]  // natural order is sorted
+     * List result = []
+     * navSet.reverseEach { result &lt;&lt; it }
+     * assert result == [4, 3, 2, 1]
+     * </pre>
+     *
+     * @param self    a NavigableSet
+     * @param closure a closure to which each item is passed.
+     * @return the original NavigableSet
+     * @since 4.0.11
+     */
+    public static <T> NavigableSet<T> reverseEach(NavigableSet<T> self, @ClosureParams(FirstParam.FirstGenericType.class) Closure closure) {
+        each(self.descendingIterator(), closure);
         return self;
     }
 
@@ -3056,6 +3072,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      * @since 1.5.0
      */
     public static Number count(Iterator self, Object value) {
+        Objects.requireNonNull(self);
         long answer = 0;
         while (self.hasNext()) {
             if (DefaultTypeTransformation.compareEqual(self.next(), value)) {
@@ -3292,7 +3309,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      * @since 2.5.0
      */
     public static <T> List<List<T>> collate(T[] self, int size) {
-        return collate((Iterable<T>)Arrays.asList(self), size, true);
+        return collate(self, size, true);
     }
 
     /**
@@ -3324,7 +3341,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      * @since 2.5.0
      */
     public static <T> List<List<T>> collate(T[] self, int size, int step) {
-        return collate((Iterable<T>)Arrays.asList(self), size, step, true);
+        return collate(self, size, step, true);
     }
 
     /**
@@ -3356,7 +3373,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      * @since 2.5.0
      */
     public static <T> List<List<T>> collate(T[] self, int size, boolean keepRemainder) {
-        return collate((Iterable<T>)Arrays.asList(self), size, size, keepRemainder);
+        return collate(self, size, size, keepRemainder);
     }
 
     /**
@@ -3414,7 +3431,26 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      * @since 2.5.0
      */
     public static <T> List<List<T>> collate(T[] self, int size, int step, boolean keepRemainder) {
-        return collate((Iterable<T>)Arrays.asList(self), size, step, keepRemainder);
+        final List<List<T>> answer;
+        if (size <= 0) {
+            answer = new ArrayList<>(1);
+            answer.add(Arrays.asList(self));
+        } else {
+            if (step == 0) throw new IllegalArgumentException("step cannot be zero");
+            final int selfSize = self.length;
+            answer = new ArrayList<>(step < 0 ? 1 : (selfSize / step + 1));
+            for (int pos = 0; pos < selfSize && pos > -1; pos += step) {
+                if (!keepRemainder && pos > selfSize - size) {
+                    break;
+                }
+                List<T> element = new ArrayList<>(size);
+                for (int offs = pos; offs < pos + size && offs < selfSize; offs++) {
+                    element.add(self[offs]);
+                }
+                answer.add(element);
+            }
+        }
+        return answer;
     }
 
     /**
@@ -4006,6 +4042,413 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
     }
 
     /**
+     * A variant of collectEntries for Iterators with separate functions for transforming the keys and values.
+     * The supplied collector map is used as the destination for transformed entries.
+     *
+     * @param self           an Iterator
+     * @param collector      the Map into which the transformed entries are put
+     * @param keyTransform   a function for transforming Iterator elements into keys
+     * @param valueTransform a function for transforming Iterator elements into values
+     * @return the collector with all transformed values added to it
+     * @since 5.0.0
+     */
+    public static <K, V, E> Map<K, V> collectEntries(Iterator<E> self, Map<K, V> collector, Function<? super E, K> keyTransform, Function<? super E, V> valueTransform) {
+        while (self.hasNext()) {
+            E element = self.next();
+            addEntry(collector, Tuple2.tuple(keyTransform.apply(element), valueTransform.apply(element)));
+        }
+        return collector;
+    }
+
+    /**
+     * A variant of collectEntries for Iterators with separate functions for transforming the keys and values.
+     *
+     * @param self           an Iterator
+     * @param keyTransform   a function for transforming Iterator elements into keys
+     * @param valueTransform a function for transforming Iterator elements into values
+     * @return a Map of the transformed entries
+     * @since 5.0.0
+     */
+    public static <K, V, E> Map<K, V> collectEntries(Iterator<E> self, Function<? super E, K> keyTransform, Function<? super E, V> valueTransform) {
+        return collectEntries(self, new LinkedHashMap<>(), keyTransform, valueTransform);
+    }
+
+    /**
+     * A variant of collectEntries for Iterables with separate functions for transforming the keys and values.
+     * The supplied collector map is used as the destination for transformed entries.
+     * <pre class="groovyTestCase">
+     * def languages = ['Groovy', 'Java', 'Kotlin', 'Scala']
+     * assert languages.collectEntries([clojure:7], String::toLowerCase, String::size) ==
+     *     [clojure:7, groovy:6, java:4, kotlin:6, scala:5]
+     * </pre>
+     *
+     * @param self           an Iterable
+     * @param collector      the Map into which the transformed entries are put
+     * @param keyTransform   a function for transforming Iterable elements into keys
+     * @param valueTransform a function for transforming Iterable elements into values
+     * @return the collector with all transformed values added to it
+     * @since 5.0.0
+     */
+    public static <K, V, E> Map<K, V> collectEntries(Iterable<E> self, Map<K, V> collector, Function<? super E, K> keyTransform, Function<? super E, V> valueTransform) {
+        return collectEntries(self.iterator(), collector, keyTransform, valueTransform);
+    }
+
+    /**
+     * A variant of collectEntries for Iterables with separate functions for transforming the keys and values.
+     * <pre class="groovyTestCase">
+     * def languages = ['Groovy', 'Java', 'Kotlin', 'Scala']
+     * assert languages.collectEntries(String::toLowerCase, String::size) ==
+     *     [groovy:6, java:4, kotlin:6, scala:5]
+     * </pre>
+     *
+     * @param self           an Iterable
+     * @param keyTransform   a function for transforming Iterable elements into keys
+     * @param valueTransform a function for transforming Iterable elements into values
+     * @return a Map of the transformed entries
+     * @since 5.0.0
+     */
+    public static <K, V, E> Map<K, V> collectEntries(Iterable<E> self, Function<? super E, K> keyTransform, Function<? super E, V> valueTransform) {
+        return collectEntries(self.iterator(), new LinkedHashMap<>(), keyTransform, valueTransform);
+    }
+
+    /**
+     * A variant of collectEntries for arrays with separate functions for transforming the keys and values.
+     * The supplied collector map is used as the destination for transformed entries.
+     *
+     * @param self           an array
+     * @param collector      the Map into which the transformed entries are put
+     * @param keyTransform   a function for transforming array elements into keys
+     * @param valueTransform a function for transforming array elements into values
+     * @return the collector with all transformed values added to it
+     * @since 5.0.0
+     */
+    public static <K, V, E> Map<K, V> collectEntries(E[] self, Map<K, V> collector, Function<? super E, K> keyTransform, Function<? super E, V> valueTransform) {
+        return collectEntries(new ArrayIterator<>(self), collector, keyTransform, valueTransform);
+    }
+
+    /**
+     * A variant of collectEntries for arrays with separate functions for transforming the keys and values.
+     * <pre class="groovyTestCase">
+     * String[] languages = ['Groovy', 'Java', 'Kotlin', 'Scala']
+     * def firstLetter = s {@code ->} s[0]
+     * assert languages.collectEntries(firstLetter, String::size) == [G:6, J:4, K:6, S:5]
+     * </pre>
+     *
+     * @param self           an array
+     * @param keyTransform   a function for transforming array elements into keys
+     * @param valueTransform a function for transforming array elements into values
+     * @return a Map of the transformed entries
+     * @since 5.0.0
+     */
+    public static <K, V, E> Map<K, V> collectEntries(E[] self, Function<? super E, K> keyTransform, Function<? super E, V> valueTransform) {
+        return collectEntries(new ArrayIterator<>(self), new LinkedHashMap<>(), keyTransform, valueTransform);
+    }
+
+    /**
+     * A variant of collectEntries for Maps with separate functions for transforming the keys and values.
+     * The supplied collector map is used as the destination for transformed entries.
+     *
+     * @param self           a Map
+     * @param collector      the Map into which the transformed entries are put
+     * @param keyTransform   a function for transforming Map keys
+     * @param valueTransform a function for transforming Map values
+     * @return the collector with all transformed values added to it
+     * @since 5.0.0
+     */
+    public static <K, V, X, Y> Map<K, V> collectEntries(Map<X, Y> self, Map<K, V> collector, Function<? super X, K> keyTransform, Function<? super Y, V> valueTransform) {
+        for (Map.Entry<X, Y> entry : self.entrySet()) {
+            addEntry(collector, Tuple2.tuple(keyTransform.apply(entry.getKey()), valueTransform.apply(entry.getValue())));
+        }
+        return collector;
+    }
+
+    /**
+     * A variant of collectEntries for Maps with separate functions for transforming the keys and values.
+     *
+     * @param self           a Map
+     * @param keyTransform   a function for transforming Map keys
+     * @param valueTransform a function for transforming Map values
+     * @return a Map of the transformed entries
+     * @since 5.0.0
+     */
+    public static <K, V, X, Y> Map<K, V> collectEntries(Map<X, Y> self, Function<? super X, K> keyTransform, Function<? super Y, V> valueTransform) {
+        return collectEntries(self, new LinkedHashMap<>(), keyTransform, valueTransform);
+    }
+
+    /**
+     * A variant of withCollectedValues for Iterators.
+     *
+     * @param keys           an Iterator
+     * @param collector      the Map into which the transformed entries are put
+     * @param valueTransform a function for transforming Iterator elements into values
+     * @return the collector with all transformed values added to it
+     * @see #withCollectedValues(Iterable, Map, Function)
+     * @since 5.0.0
+     */
+    public static <K, V> Map<K, V> withCollectedValues(Iterator<K> keys, Map<K, V> collector, Function<? super K, V> valueTransform) {
+        return collectEntries(keys, collector, Function.identity(), valueTransform);
+    }
+
+    /**
+     * A variant of withCollectedValues for Iterators.
+     *
+     * @param keys           an Iterator
+     * @param valueTransform a function for transforming Iterator elements into values
+     * @return a Map of the transformed entries
+     * @see #withCollectedValues(Iterable, Function)
+     * @since 5.0.0
+     */
+    public static <K, V> Map<K, V> withCollectedValues(Iterator<K> keys, Function<? super K, V> valueTransform) {
+        return withCollectedValues(keys, new LinkedHashMap<>(), valueTransform);
+    }
+
+    /**
+     * Transform Iterable elements into Map entries with keys unchanged
+     * and values transformed using the supplied function.
+     * The supplied collector map is used as the destination for transformed entries.
+     * <pre class="groovyTestCase">
+     * def languages = ['Groovy', 'Java', 'Kotlin', 'Scala']
+     * assert languages.withCollectedValues([Clojure:7], String::size) ==
+     *     [Clojure:7, Groovy:6, Java:4, Kotlin:6, Scala:5]
+     * </pre>
+     * This method is a convenience method for {@link #collectEntries(Iterable, Map, Function, Function)}
+     * with the {@code keyTransform} replaced by {@code Function.identity()} or {Closure.IDENTITY}.
+     *
+     * @param keys           an Iterable
+     * @param collector      the Map into which the transformed entries are put
+     * @param valueTransform a function for transforming Iterable elements into values
+     * @return the collector with all transformed values added to it
+     * @since 5.0.0
+     */
+    public static <K, V> Map<K, V> withCollectedValues(Iterable<K> keys, Map<K, V> collector, Function<? super K, V> valueTransform) {
+        return collectEntries(keys.iterator(), collector, Function.identity(), valueTransform);
+    }
+
+    /**
+     * Transform Iterable elements into Map entries with keys unchanged
+     * and values transformed using the supplied function.
+     * <pre class="groovyTestCase">
+     * def languages = ['Groovy', 'Java', 'Kotlin', 'Scala']
+     * assert languages.withCollectedValues(String::size) ==
+     *     [Groovy:6, Java:4, Kotlin:6, Scala:5]
+     * </pre>
+     * This method is a convenience method for {@link #collectEntries(Iterable, Function, Function)}
+     * with the {@code keyTransform} replaced by {@code Function.identity()} or {Closure.IDENTITY}.
+     *
+     * @param keys           an Iterable
+     * @param valueTransform a function for transforming Iterable elements into values
+     * @return a Map of the transformed entries
+     * @since 5.0.0
+     */
+    public static <K, V> Map<K, V> withCollectedValues(Iterable<K> keys, Function<? super K, V> valueTransform) {
+        return withCollectedValues(keys.iterator(), new LinkedHashMap<>(), valueTransform);
+    }
+
+    /**
+     * A variant of withCollectedValues for arrays.
+     *
+     * @param keys           an array
+     * @param collector      the Map into which the transformed entries are put
+     * @param valueTransform a function for transforming array elements into values
+     * @return the collector with all transformed values added to it
+     * @since 5.0.0
+     */
+    public static <K, V> Map<K, V> withCollectedValues(K[] keys, Map<K, V> collector, Function<? super K, V> valueTransform) {
+        return collectEntries(new ArrayIterator<>(keys), collector, Function.identity(), valueTransform);
+    }
+
+    /**
+     * A variant of withCollectedValues for arrays.
+     *
+     * @param keys           an array
+     * @param valueTransform a function for transforming array elements into values
+     * @return a Map of the transformed entries
+     * @since 5.0.0
+     */
+    public static <K, V> Map<K, V> withCollectedValues(K[] keys, Function<? super K, V> valueTransform) {
+        return withCollectedValues(new ArrayIterator<>(keys), new LinkedHashMap<>(), valueTransform);
+    }
+
+    /**
+     * Transform a Maps' values leaving the keys unchanged.
+     * Similar to {@link #withCollectedValues(Iterable, Map, Function)} but for Maps.
+     * <pre class="groovyTestCase">
+     * def lengths = [Groovy:6, Java:4, Kotlin:6, Scala:5]
+     * def squared = e {@code ->} e ** 2
+     * assert lengths.collectValues([Clojure:49], squared) ==
+     *     [Clojure:49, Groovy:36, Java:16, Kotlin:36, Scala:25]
+     * </pre>
+     *
+     * @param keys           a Map
+     * @param collector      the Map into which the transformed entries are put
+     * @param valueTransform a function for transforming Map values
+     * @return the collector with all transformed values added to it
+     * @since 5.0.0
+     */
+    public static <K, V> Map<K, V> collectValues(Map<K, V> keys, Map<K, V> collector, Function<? super V, V> valueTransform) {
+        for (Map.Entry<K, V> entry : keys.entrySet()) {
+            addEntry(collector, Tuple2.tuple(entry.getKey(), valueTransform.apply(entry.getValue())));
+        }
+        return collector;
+    }
+
+    /**
+     * Transform a Maps' values leaving the keys unchanged.
+     * Similar to {@link #withCollectedValues(Iterable, Function)} but for Maps.
+     * <pre class="groovyTestCase">
+     * def lengths = [Groovy:6, Java:4, Kotlin:6, Scala:5]
+     * def squared = e {@code ->} e ** 2
+     * assert lengths.collectValues(squared) == [Groovy:36, Java:16, Kotlin:36, Scala:25]
+     * </pre>
+     *
+     * @param keys           a Map
+     * @param valueTransform a function for transforming Map values
+     * @return a Map of the transformed entries
+     * @since 5.0.0
+     */
+    public static <K, V> Map<K, V> collectValues(Map<K, V> keys, Function<? super V, V> valueTransform) {
+        return collectValues(keys, new LinkedHashMap<>(), valueTransform);
+    }
+
+    /**
+     * A variant of withCollectedKeys for Iterators.
+     *
+     * @param values       an Iterator
+     * @param collector    the Map into which the transformed entries are put
+     * @param keyTransform a function for transforming Iterator elements into values
+     * @return the collector with all transformed values added to it
+     * @see #withCollectedKeys(Iterable, Map, Function)
+     * @since 5.0.0
+     */
+    public static <K, V> Map<K, V> withCollectedKeys(Iterator<V> values, Map<K, V> collector, Function<? super V, K> keyTransform) {
+        return collectEntries(values, collector, keyTransform, Function.identity());
+    }
+
+    /**
+     * A variant of withCollectedKeys for Iterators.
+     *
+     * @param values       an Iterator
+     * @param keyTransform a function for transforming Iterator elements into values
+     * @return a Map of the transformed entries
+     * @see #withCollectedKeys(Iterable, Function)
+     * @since 5.0.0
+     */
+    public static <K, V> Map<K, V> withCollectedKeys(Iterator<V> values, Function<? super V, K> keyTransform) {
+        return withCollectedKeys(values, new LinkedHashMap<>(), keyTransform);
+    }
+
+    /**
+     * Transform Iterable elements into Map entries with values unchanged
+     * and keys transformed using the supplied function.
+     * The supplied map is used as the destination for transformed entries.
+     * <pre class="groovyTestCase">
+     * def languages = ['Groovy', 'Java', 'Kotlin', 'Scala']
+     * def firstLetter = s {@code ->} s[0]
+     * assert languages.withCollectedKeys([C:'Clojure'], firstLetter) ==
+     *     [C:'Clojure', G:'Groovy', J:'Java', K:'Kotlin', S:'Scala']
+     * </pre>
+     * This method is a convenience method for {@link #collectEntries(Iterable, Map, Function, Function)}
+     * with the {@code valueTransform} replaced by {@code Function.identity()} or {Closure.IDENTITY}.
+     *
+     * @param values       an Iterable that will become the added entry values
+     * @param collector    the Map into which the transformed entries are put
+     * @param keyTransform a function for transforming Iterator elements into keys
+     * @return the collector with all transformed values added to it
+     * @since 5.0.0
+     */
+    public static <K, V> Map<K, V> withCollectedKeys(Iterable<V> values, Map<K, V> collector, Function<? super V, K> keyTransform) {
+        return collectEntries(values.iterator(), collector, keyTransform, Function.identity());
+    }
+
+    /**
+     * Transform Iterable elements into Map entries with values unchanged
+     * and keys transformed using the supplied function.
+     * <pre class="groovyTestCase">
+     * def languages = ['Groovy', 'Java', 'Kotlin', 'Scala']
+     * def firstLetter = s {@code ->} s[0]
+     * assert languages.withCollectedKeys(firstLetter) ==
+     *     [G:'Groovy', J:'Java', K:'Kotlin', S:'Scala']
+     * </pre>
+     * This method is a convenience method for {@link #collectEntries(Iterable, Function, Function)}
+     * with the {@code valueTransform} replaced by {@code Function.identity()} or {Closure.IDENTITY}.
+     *
+     * @param values       an Iterable that will become the added entry values
+     * @param keyTransform a function for transforming Iterator elements into keys
+     * @return the collector with all transformed values added to it
+     * @since 5.0.0
+     */
+    public static <K, V> Map<K, V> withCollectedKeys(Iterable<V> values, Function<? super V, K> keyTransform) {
+        return withCollectedKeys(values.iterator(), new LinkedHashMap<>(), keyTransform);
+    }
+
+    /**
+     * A variant of withCollectedKeys for arrays.
+     *
+     * @param values       an array
+     * @param collector    the Map into which the transformed entries are put
+     * @param keyTransform a function for transforming array elements into values
+     * @return the collector with all transformed values added to it
+     * @see #withCollectedKeys(Iterable, Map, Function)
+     * @since 5.0.0
+     */
+    public static <K, V> Map<K, V> withCollectedKeys(V[] values, Map<K, V> collector, Function<? super V, K> keyTransform) {
+        return collectEntries(new ArrayIterator<>(values), collector, keyTransform, Function.identity());
+    }
+
+    /**
+     * A variant of withCollectedKeys for arrays.
+     *
+     * @param values       an array
+     * @param keyTransform a function for transforming array elements into values
+     * @return the collector with all transformed values added to it
+     * @see #withCollectedKeys(Iterable, Function)
+     * @since 5.0.0
+     */
+    public static <K, V> Map<K, V> withCollectedKeys(V[] values, Function<? super V, K> keyTransform) {
+        return withCollectedKeys(new ArrayIterator<>(values), new LinkedHashMap<>(), keyTransform);
+    }
+
+    /**
+     * Transform a Maps' keys leaving the values unchanged.
+     * Similar to {@link #withCollectedKeys(Iterable, Map, Function)} but for Maps.
+     * <pre class="groovyTestCase">
+     * def lengths = [Groovy:6, Java:4, Kotlin:6, Scala:5]
+     * def firstLetter = s {@code ->} s[0]
+     * assert lengths.collectKeys([C:7], firstLetter) == [C:7, G:6, J:4, K:6, S:5]
+     * </pre>
+     *
+     * @param keys         a Map
+     * @param collector    the Map into which the transformed entries are put
+     * @param keyTransform a function for transforming Map keys
+     * @return the collector with all transformed values added to it
+     * @since 5.0.0
+     */
+    public static <K, V> Map<K, V> collectKeys(Map<K, V> keys, Map<K, V> collector, Function<? super K, K> keyTransform) {
+        for (Map.Entry<K, V> entry : keys.entrySet()) {
+            addEntry(collector, Tuple2.tuple(keyTransform.apply(entry.getKey()), entry.getValue()));
+        }
+        return collector;
+    }
+
+    /**
+     * Transform a Maps' keys leaving the values unchanged.
+     * Similar to {@link #withCollectedKeys(Iterable, Function)} but for Maps.
+     * <pre class="groovyTestCase">
+     * def lengths = [Groovy:6, Java:4, Kotlin:6, Scala:5]
+     * def firstLetter = s {@code ->} s[0]
+     * assert lengths.collectKeys(firstLetter) == [G:6, J:4, K:6, S:5]
+     * </pre>
+     *
+     * @param keys         a Map
+     * @param keyTransform a function for transforming Map keys
+     * @return a Map of the transformed entries
+     * @since 5.0.0
+     */
+    public static <K, V> Map<K, V> collectKeys(Map<K, V> keys, Function<? super K, K> keyTransform) {
+        return collectKeys(keys, new LinkedHashMap<>(), keyTransform);
+    }
+
+    /**
      * Iterates through this Iterable transforming each item using the closure
      * as a transformer into a map entry, returning the supplied map with all the transformed entries added to it.
      * <pre class="groovyTestCase">
@@ -4296,6 +4739,28 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
     }
 
     /**
+     * Treats the object as iterable, iterating through the values it represents and returns the first non-null value, otherwise returns null.
+     * <p>
+     * <pre class="groovyTestCase">
+     * class Foo {
+     *     List items
+     *     Iterator iterator() {
+     *         items.iterator()
+     *     }
+     * }
+     * assert new Foo(items: [null, 2, 4]).findResult() == 2
+     * assert new Foo(items: [null, null]).findResult() == null
+     * </pre>
+     *
+     * @param self      an Object with an iterator returning its values
+     * @return the first non-null result of the closure
+     * @since 4.0.9
+     */
+    public static Object findResult(Object self) {
+        return findResult(self, Closure.IDENTITY);
+    }
+
+    /**
      * Treats the object as iterable, iterating through the values it represents and returns the first non-null result obtained from calling the closure, otherwise returns the defaultResult.
      * <p>
      * <pre class="groovyTestCase">
@@ -4312,6 +4777,31 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      */
     public static Object findResult(Object self, Object defaultResult, Closure condition) {
         Object result = findResult(self, condition);
+        if (result == null) return defaultResult;
+        return result;
+    }
+
+    /**
+     * Treats the object as iterable, iterating through the values it represents and returns the first non-null result, otherwise returns the defaultResult.
+     * <p>
+     * <pre class="groovyTestCase">
+     * class Foo {
+     *     List items
+     *     Iterator iterator() {
+     *         items.iterator()
+     *     }
+     * }
+     * assert new Foo(items: [null, 2, 4]).findResult(5) == 2
+     * assert new Foo(items: [null, null]).findResult(5) == 5
+     * </pre>
+     *
+     * @param self          an Object with an iterator returning its values
+     * @param defaultResult an Object that should be returned if all elements are null
+     * @return the first non-null element, otherwise the default value
+     * @since 4.0.9
+     */
+    public static Object findResult(Object self, Object defaultResult) {
+        Object result = findResult(self, Closure.IDENTITY);
         if (result == null) return defaultResult;
         return result;
     }
@@ -4340,6 +4830,26 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
     }
 
     /**
+     * Iterates through the Iterator stopping once the first non-null
+     * result is found and returning that result. If all are null, the defaultResult is returned.
+     * <p>
+     * Examples:
+     * <pre class="groovyTestCase">
+     * assert [null, 1, 2].iterator().findResult('default') == 1
+     * assert [null, null].findResult('default') == 'default'
+     * </pre>
+     *
+     * @param self          an Iterator
+     * @param defaultResult an Object that should be returned if all elements are null
+     * @return the first non-null result from the iterator, or the defaultValue
+     * @since 4.0.9
+     */
+    public static <T, U extends T, V extends T> T findResult(Iterator<U> self, V defaultResult) {
+        T result = (T) findResult(self, Closure.IDENTITY);
+        return result == null ? defaultResult : result;
+    }
+
+    /**
      * Iterates through the Iterator calling the given closure condition for each item but stopping once the first non-null
      * result is found and returning that result. If all results are null, null is returned.
      *
@@ -4357,6 +4867,18 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
             }
         }
         return null;
+    }
+
+    /**
+     * Iterates through the Iterator stopping once the first non-null
+     * result is found and returning that result. If all results are null, null is returned.
+     *
+     * @param self      an Iterator
+     * @return the first non-null result from the iterator, or null
+     * @since 4.0.9
+     */
+    public static <T> T findResult(Iterator<T> self) {
+        return (T) findResult(self, Closure.IDENTITY);
     }
 
     /**
@@ -4384,6 +4906,27 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
 
     /**
      * Iterates through the Iterable calling the given closure condition for each item but stopping once the first non-null
+     * result is found and returning that result. If all are null, the defaultResult is returned.
+     * <p>
+     * Examples:
+     * <pre class="groovyTestCase">
+     * assert [null, 1, 2].findResult('default') == 1
+     * assert [null, null].findResult('default') == 'default'
+     * </pre>
+     *
+     * @param self          an Iterable
+     * @param defaultResult an Object that should be returned if all elements in the iterable are null
+     * @return the first non-null element from the iterable, or the defaultValue
+     * @since 4.0.9
+     */
+    public static <T, U extends T, V extends T> T findResult(Iterable<U> self, V defaultResult) {
+        T result = (T) findResult(self, Closure.IDENTITY);
+        if (result == null) return defaultResult;
+        return result;
+    }
+
+    /**
+     * Iterates through the Iterable calling the given closure condition for each item but stopping once the first non-null
      * result is found and returning that result. If all results are null, null is returned.
      *
      * @param self      an Iterable
@@ -4393,6 +4936,18 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      */
     public static <T, U> T findResult(Iterable<U> self, @ClosureParams(FirstParam.FirstGenericType.class) Closure<T> condition) {
         return findResult(self.iterator(), condition);
+    }
+
+    /**
+     * Iterates through the Iterable stopping once the first non-null
+     * result is found and returning that result. If all results are null, null is returned.
+     *
+     * @param self      an Iterable
+     * @return the first non-null element from the iterable, or null
+     * @since 4.0.9
+     */
+    public static <T> T findResult(Iterable<T> self) {
+        return (T) findResult(self.iterator(), Closure.IDENTITY);
     }
 
     /**
@@ -4410,6 +4965,19 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
     }
 
     /**
+     * Iterates through the Array stopping once the first non-null
+     * result is found and returning that result. If all are null, the defaultResult is returned.
+     *
+     * @param self          an Array
+     * @param defaultResult an Object that should be returned if all elements are null
+     * @return the first non-null result from calling the closure, or the defaultValue
+     * @since 4.0.9
+     */
+    public static <T, U extends T, V extends T> T findResult(U[] self, V defaultResult) {
+        return (T) findResult(new ArrayIterator<>(self), defaultResult, Closure.IDENTITY);
+    }
+
+    /**
      * Iterates through the Array calling the given closure condition for each item but stopping once the first non-null
      * result is found and returning that result. If all results are null, null is returned.
      *
@@ -4420,6 +4988,18 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      */
     public static <S, T> T findResult(S[] self, @ClosureParams(FirstParam.Component.class) Closure<T> condition) {
         return findResult(new ArrayIterator<>(self), condition);
+    }
+
+    /**
+     * Iterates through the Array stopping once the first non-null
+     * result is found and returning that result. If all results are null, null is returned.
+     *
+     * @param self      an Array
+     * @return the first non-null result from calling the closure, or null
+     * @since 4.0.9
+     */
+    public static <T> T findResult(T[] self) {
+        return (T) findResult(new ArrayIterator<>(self), Closure.IDENTITY);
     }
 
     /**
@@ -4490,6 +5070,22 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
     }
 
     /**
+     * Iterates through the Iterable collecting any non-null results.
+     * <p>
+     * Example:
+     * <pre class="groovyTestCase">
+     * assert [1, null, 2, null, 3].findResults() == [1, 2, 3]
+     * </pre>
+     *
+     * @param self an Iterable
+     * @return the list of non-null values
+     * @since 4.0.9
+     */
+    public static <T> Collection<T> findResults(Iterable<T> self) {
+        return findResults(self.iterator(), Closure.IDENTITY);
+    }
+
+    /**
      * Iterates through the Iterator transforming items using the supplied closure
      * and collecting any non-null results.
      *
@@ -4511,6 +5107,17 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
     }
 
     /**
+     * Iterates through the Iterator collecting any non-null results.
+     *
+     * @param self an Iterator
+     * @return the list of non-null values
+     * @since 4.0.9
+     */
+    public static <T> Collection<T> findResults(Iterator<T> self) {
+        return findResults(self, Closure.IDENTITY);
+    }
+
+    /**
      * Iterates through the Array transforming items using the supplied closure
      * and collecting any non-null results.
      *
@@ -4521,6 +5128,17 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      */
     public static <T, U> Collection<T> findResults(U[] self, @ClosureParams(FirstParam.Component.class) Closure<T> filteringTransform) {
         return findResults(new ArrayIterator<>(self), filteringTransform);
+    }
+
+    /**
+     * Iterates through the Array collecting any non-null results.
+     *
+     * @param self               an Array
+     * @return the list of non-null values
+     * @since 4.0.9
+     */
+    public static <T> Collection<T> findResults(T[] self) {
+        return findResults(self, Closure.IDENTITY);
     }
 
     /**
@@ -5274,62 +5892,20 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
         return GroovyCollections.transpose(self);
     }
 
-    /**
-     * A transpose method for 2D int arrays.
-     * <p>
-     * Example usage:
-     * <pre class="groovyTestCase">
-     * int[][] nums = [[10, 15, 20], [30, 35, 40]]
-     * int[][] expected = [[10, 30], [15, 35], [20, 40]]
-     * assert nums.transpose() == expected
-     * </pre>
-     *
-     * @param self a 2D int array
-     * @return the transposed 2D int array
-     * @since 3.0.8
-     */
+
+    @Deprecated
     public static int[][] transpose(int[][] self) {
-        int[][] result = new int[self[0].length][self.length];
-        for (int i = 0; i < self.length; i++) {
-            for (int j = 0; j < self[i].length; j++) {
-                result[j][i] = self[i][j];
-            }
-        }
-        return result;
+        return ArrayGroovyMethods.transpose(self);
     }
 
-    /**
-     * A transpose method for 2D long arrays.
-     *
-     * @param self a 2D long array
-     * @return the transposed 2D long array
-     * @since 3.0.8
-     */
+    @Deprecated
     public static long[][] transpose(long[][] self) {
-        long[][] result = new long[self[0].length][self.length];
-        for (int i = 0; i < self.length; i++) {
-            for (int j = 0; j < self[i].length; j++) {
-                result[j][i] = self[i][j];
-            }
-        }
-        return result;
+        return ArrayGroovyMethods.transpose(self);
     }
 
-    /**
-     * A transpose method for 2D double arrays.
-     *
-     * @param self a 2D double array
-     * @return the transposed 2D double array
-     * @since 3.0.8
-     */
+    @Deprecated
     public static double[][] transpose(double[][] self) {
-        double[][] result = new double[self[0].length][self.length];
-        for (int i = 0; i < self.length; i++) {
-            for (int j = 0; j < self[i].length; j++) {
-                result[j][i] = self[i][j];
-            }
-        }
-        return result;
+        return ArrayGroovyMethods.transpose(self);
     }
 
     /**
@@ -6476,6 +7052,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      * @since 1.5.5
      */
     public static String join(Iterator<?> self, String separator) {
+        Objects.requireNonNull(self);
         if (separator == null) separator = "";
         StringBuilder buffer = new StringBuilder();
         boolean first = true;
@@ -6604,73 +7181,19 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
         return min(new ArrayIterator<>(self));
     }
 
-    /**
-     * Adds min() method to int arrays.
-     * <p/>
-     * Example usage:
-     * <pre class="groovyTestCase">
-     * int[] nums = [10, 20, 30]
-     * assert 10 == nums.min()
-     * </pre>
-     *
-     * @param self an int array
-     * @return the minimum value
-     * @see #min(Object[])
-     * @since 3.0.8
-     */
+    @Deprecated
     public static int min(int[] self) {
-        Objects.requireNonNull(self);
-        if (self.length == 0) {
-            throw new UnsupportedOperationException("Can't call min() on empty int[]");
-        }
-        int answer = self[0];
-        for (int i = 1; i < self.length; i++) {
-            int value = self[i];
-            if (value < answer) answer = value;
-        }
-        return answer;
+        return ArrayGroovyMethods.max(self);
     }
 
-    /**
-     * Adds min() method to long arrays.
-     *
-     * @param self a long array
-     * @return the minimum value
-     * @see #min(Object[])
-     * @since 3.0.8
-     */
+    @Deprecated
     public static long min(long[] self) {
-        Objects.requireNonNull(self);
-        if (self.length == 0) {
-            throw new UnsupportedOperationException("Can't call min() on empty long[]");
-        }
-        long answer = self[0];
-        for (int i = 1; i < self.length; i++) {
-            long value = self[i];
-            if (value < answer) answer = value;
-        }
-        return answer;
+        return ArrayGroovyMethods.max(self);
     }
 
-    /**
-     * Adds min() method to double arrays.
-     *
-     * @param self a double array
-     * @return the minimum value
-     * @see #min(Object[])
-     * @since 3.0.8
-     */
+    @Deprecated
     public static double min(double[] self) {
-        Objects.requireNonNull(self);
-        if (self.length == 0) {
-            throw new UnsupportedOperationException("Can't call min() on empty double[]");
-        }
-        double answer = self[0];
-        for (int i = 1; i < self.length; i++) {
-            double value = self[i];
-            if (value < answer) answer = value;
-        }
-        return answer;
+        return ArrayGroovyMethods.max(self);
     }
 
     /**
@@ -6696,6 +7219,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      * @since 1.5.5
      */
     public static <T> T min(Iterator<T> self, Comparator<? super T> comparator) {
+        Objects.requireNonNull(self);
         T answer = null;
         boolean first = true;
         while (self.hasNext()) {
@@ -6860,6 +7384,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
         if (params != 1) {
             return min(self, new ClosureComparator<>(closure));
         }
+        Objects.requireNonNull(self);
         boolean first = true;
         T answer = null;
         Object answerValue = null;
@@ -6947,73 +7472,19 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
         return max(new ArrayIterator<>(self));
     }
 
-    /**
-     * Adds max() method to int arrays.
-     *
-     * @param self an int array
-     * @return the maximum value
-     * @see #max(Object[])
-     * @since 3.0.8
-     */
+    @Deprecated
     public static int max(int[] self) {
-        Objects.requireNonNull(self);
-        if (self.length == 0) {
-            throw new UnsupportedOperationException("Can't call max() on empty int[]");
-        }
-        int answer = self[0];
-        for (int i = 1; i < self.length; i++) {
-            int value = self[i];
-            if (value > answer) answer = value;
-        }
-        return answer;
+        return ArrayGroovyMethods.max(self);
     }
 
-    /**
-     * Adds max() method to long arrays.
-     *
-     * @param self a long array
-     * @return the maximum value
-     * @see #max(Object[])
-     * @since 3.0.8
-     */
+    @Deprecated
     public static long max(long[] self) {
-        Objects.requireNonNull(self);
-        if (self.length == 0) {
-            throw new UnsupportedOperationException("Can't call max() on empty long[]");
-        }
-        long answer = self[0];
-        for (int i = 1; i < self.length; i++) {
-            long value = self[i];
-            if (value > answer) answer = value;
-        }
-        return answer;
+        return ArrayGroovyMethods.max(self);
     }
 
-    /**
-     * Adds max() method to double arrays.
-     * <p/>
-     * Example usage:
-     * <pre class="groovyTestCase">
-     * double[] nums = [1.1d, 2.2d, 3.3d]
-     * assert 3.3d == nums.max()
-     * </pre>
-     *
-     * @param self a double array
-     * @return the maximum value
-     * @see #max(Object[])
-     * @since 3.0.8
-     */
+    @Deprecated
     public static double max(double[] self) {
-        Objects.requireNonNull(self);
-        if (self.length == 0) {
-            throw new UnsupportedOperationException("Can't call max() on empty double[]");
-        }
-        double answer = self[0];
-        for (int i = 1; i < self.length; i++) {
-            double value = self[i];
-            if (value > answer) answer = value;
-        }
-        return answer;
+        return ArrayGroovyMethods.max(self);
     }
 
     /**
@@ -8613,6 +9084,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      * @since 2.4.0
      */
     public static <E> Map<Integer, E> indexed(Iterable<E> self, int offset) {
+        Objects.requireNonNull(self);
         Map<Integer, E> result = new LinkedHashMap<>();
         Iterator<Tuple2<Integer, E>> indexed = indexed(self.iterator(), offset);
         while (indexed.hasNext()) {
@@ -8622,80 +9094,34 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
         return result;
     }
 
-    /**
-     * Zips an int[] with indices in (index, value) order starting from index 0.
-     *
-     * @see #indexed(int[], int)
-     * @since 3.0.8
-     */
+    @Deprecated
     public static Map<Integer, Integer> indexed(int[] self) {
-        return indexed(self, 0);
+        return ArrayGroovyMethods.indexed(self);
     }
 
-    /**
-     * Zips an int[] with indices in (index, value) order.
-     * <p/>
-     * Example usage:
-     * <pre class="groovyTestCase">
-     * int[] nums = [10, 20, 30]
-     * assert [5: 10, 6: 20, 7: 30] == nums.indexed(5)
-     * assert ["1: 10", "2: 20", "3: 30"] == nums.indexed(1).collect { idx, str {@code ->} "$idx: $str" }
-     * </pre>
-     *
-     * @param self   an Iterable
-     * @param offset an index to start from
-     * @return a Map (since the keys/indices are unique) containing the elements from the iterable zipped with indices
-     * @see #indexed(Iterable, int)
-     * @since 3.0.8
-     */
+    @Deprecated
     public static Map<Integer, Integer> indexed(int[] self, int offset) {
-        return indexed(new IntArrayIterable(self), offset);
+        return ArrayGroovyMethods.indexed(self, offset);
     }
 
-    /**
-     * Zips a long[] with indices in (index, value) order starting from index 0.
-     *
-     * @see #indexed(long[], int)
-     * @since 3.0.8
-     */
+    @Deprecated
     public static Map<Integer, Long> indexed(long[] self) {
-        return indexed(self, 0);
+        return ArrayGroovyMethods.indexed(self);
     }
 
-    /**
-     * Zips a long[] with indices in (index, value) order.
-     *
-     * @param self   a long[]
-     * @param offset an index to start from
-     * @return a Map (since the keys/indices are unique) containing the elements from the iterable zipped with indices
-     * @see #indexed(Iterable, int)
-     * @since 3.0.8
-     */
+    @Deprecated
     public static Map<Integer, Long> indexed(long[] self, int offset) {
-        return indexed(new LongArrayIterable(self), offset);
+        return ArrayGroovyMethods.indexed(self, offset);
     }
 
-    /**
-     * Zips a double[] with indices in (index, value) order starting from index 0.
-     *
-     * @see #indexed(double[], int)
-     * @since 3.0.8
-     */
+    @Deprecated
     public static Map<Integer, Double> indexed(double[] self) {
-        return indexed(self, 0);
+        return ArrayGroovyMethods.indexed(self);
     }
 
-    /**
-     * Zips a double[] with indices in (index, value) order.
-     *
-     * @param self   a double[]
-     * @param offset an index to start from
-     * @return a Map (since the keys/indices are unique) containing the elements from the iterable zipped with indices
-     * @see #indexed(Iterable, int)
-     * @since 3.0.8
-     */
+    @Deprecated
     public static Map<Integer, Double> indexed(double[] self, int offset) {
-        return indexed(new DoubleArrayIterable(self), offset);
+        return ArrayGroovyMethods.indexed(self, offset);
     }
 
     /**
@@ -9619,7 +10045,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      *
      * @param self a List
      * @return the last item from the List
-     * @throws NoSuchElementException if the list is empty and you try to access the last() item.
+     * @throws NoSuchElementException if you try to access last() for an empty List
      * @since 1.5.5
      */
     public static <T> T last(List<T> self) {
@@ -9643,7 +10069,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      *
      * @param self an Iterable
      * @return the last item from the Iterable
-     * @throws NoSuchElementException if the Iterable is empty and you try to access the last() item.
+     * @throws NoSuchElementException if you try to access last() for an empty Iterable
      * @since 1.8.7
      */
     public static <T> T last(Iterable<T> self) {
@@ -9667,7 +10093,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      *
      * @param self an array
      * @return the last item from the array
-     * @throws NoSuchElementException if the array is empty and you try to access the last() item.
+     * @throws NoSuchElementException if you try to access last() for an empty array
      * @since 1.7.3
      */
     public static <T> T last(T[] self) {
@@ -9688,7 +10114,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      *
      * @param self a List
      * @return the first item from the List
-     * @throws NoSuchElementException if the list is empty and you try to access the first() item.
+     * @throws NoSuchElementException if you try to access first() for an empty List
      * @since 1.5.5
      */
     public static <T> T first(List<T> self) {
@@ -9712,7 +10138,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      *
      * @param self an Iterable
      * @return the first item from the Iterable
-     * @throws NoSuchElementException if the Iterable is empty and you try to access the first() item.
+     * @throws NoSuchElementException if you try to access first() for an empty Iterable
      * @since 1.8.7
      */
     public static <T> T first(Iterable<T> self) {
@@ -9732,7 +10158,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      *
      * @param self an array
      * @return the first item from the array
-     * @throws NoSuchElementException if the array is empty and you try to access the first() item.
+     * @throws NoSuchElementException if you try to access first() for an empty array
      * @since 1.7.3
      */
     public static <T> T first(T[] self) {
@@ -9756,7 +10182,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      *
      * @param self an Iterable
      * @return the first item from the Iterable
-     * @throws NoSuchElementException if the Iterable is empty and you try to access the head() item.
+     * @throws NoSuchElementException if you try to access head() for an empty iterable
      * @since 2.4.0
      */
     public static <T> T head(Iterable<T> self) {
@@ -9771,7 +10197,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      *
      * @param self a List
      * @return the first item from the List
-     * @throws NoSuchElementException if the list is empty and you try to access the head() item.
+     * @throws NoSuchElementException if you try to access head() for an empty List
      * @since 1.5.5
      */
     public static <T> T head(List<T> self) {
@@ -9785,7 +10211,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      *
      * @param self an array
      * @return the first item from the Object array
-     * @throws NoSuchElementException if the array is empty and you try to access the head() item.
+     * @throws NoSuchElementException if you try to access head() for an empty array
      * @since 1.7.3
      */
     public static <T> T head(T[] self) {
@@ -9802,7 +10228,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      *
      * @param self a List
      * @return a List without its first element
-     * @throws NoSuchElementException if the List is empty and you try to access the tail()
+     * @throws NoSuchElementException if you try to access tail() for an empty List
      * @since 1.5.6
      */
     public static <T> List<T> tail(List<T> self) {
@@ -9819,7 +10245,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      *
      * @param self a SortedSet
      * @return a SortedSet without its first element
-     * @throws NoSuchElementException if the SortedSet is empty and you try to access the tail()
+     * @throws NoSuchElementException if you try to access tail() for an empty SortedSet
      * @since 2.4.0
      */
     public static <T> SortedSet<T> tail(SortedSet<T> self) {
@@ -9850,7 +10276,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      *
      * @param self an Iterable
      * @return a collection without its first element
-     * @throws NoSuchElementException if the iterable is empty and you try to access the tail()
+     * @throws NoSuchElementException if you try to access tail() for an empty Iterable
      * @since 2.4.0
      */
     public static <T> Collection<T> tail(Iterable<T> self) {
@@ -9874,7 +10300,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      *
      * @param self an array
      * @return an array without its first element
-     * @throws NoSuchElementException if the array is empty and you try to access the tail()
+     * @throws NoSuchElementException if you try to access tail() for an empty array
      * @since 1.7.3
      */
     public static <T> T[] tail(T[] self) {
@@ -9889,7 +10315,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      *
      * @param self the original iterator
      * @return the iterator without its first element
-     * @throws NoSuchElementException if the array is empty and you try to access the tail()
+     * @throws NoSuchElementException if you try to access tail() for an exhausted/empty Iterator
      * @since 1.8.1
      */
     public static <T> Iterator<T> tail(Iterator<T> self) {
@@ -9924,7 +10350,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      *
      * @param self an Iterable
      * @return a Collection without its last element
-     * @throws NoSuchElementException if the iterable is empty and you try to access init()
+     * @throws NoSuchElementException if you try to access init() for an empty Iterable
      * @since 2.4.0
      */
     public static <T> Collection<T> init(Iterable<T> self) {
@@ -9952,7 +10378,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      *
      * @param self a List
      * @return a List without its last element
-     * @throws NoSuchElementException if the List is empty and you try to access init()
+     * @throws NoSuchElementException if you try to access init() for an empty List
      * @since 2.4.0
      */
     public static <T> List<T> init(List<T> self) {
@@ -9969,7 +10395,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      *
      * @param self a SortedSet
      * @return a SortedSet without its last element
-     * @throws NoSuchElementException if the SortedSet is empty and you try to access init()
+     * @throws NoSuchElementException if you try to access init() for an empty SortedSet
      * @since 2.4.0
      */
     public static <T> SortedSet<T> init(SortedSet<T> self) {
@@ -9986,7 +10412,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      *
      * @param self an Iterator
      * @return an Iterator without the last element from the original Iterator
-     * @throws NoSuchElementException if the iterator is empty and you try to access init()
+     * @throws NoSuchElementException if you try to access init() for an exhausted/empty Iterator
      * @since 2.4.0
      */
     public static <T> Iterator<T> init(Iterator<T> self) {
@@ -10042,7 +10468,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      *
      * @param self an array
      * @return an array without its last element
-     * @throws NoSuchElementException if the array is empty and you try to access the init() item.
+     * @throws NoSuchElementException if you try to access init() for an empty array
      * @since 2.4.0
      */
     public static <T> T[] init(T[] self) {
@@ -11746,6 +12172,22 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
     }
 
     /**
+     * Creates a reverse order view of the set. The order of original list will not change.
+     * <pre class="groovyTestCase">
+     * TreeSet navSet = [2, 4, 1, 3]  // natural order is sorted
+     * assert navSet.asReversed() == [4, 3, 2, 1] as Set
+     * </pre>
+     *
+     * @param self a NavigableSet
+     * @param <T> the type of element
+     * @return the reversed view NavigableSet
+     * @since 4.0.11
+     */
+    public static <T> NavigableSet<T> asReversed(NavigableSet<T> self) {
+        return self.descendingSet();
+    }
+
+    /**
      * Creates a new List with the identical contents to this list
      * but in reverse order.
      * <pre class="groovyTestCase">
@@ -12748,6 +13190,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      * @since 2.5.2
      */
     public static <T> List<List<T>> chop(Iterator<T> self, int... chopSizes) {
+        Objects.requireNonNull(self);
         List<List<T>> result = new ArrayList<>();
         for (int nextSize : chopSizes) {
             int size = nextSize;
@@ -13455,98 +13898,43 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
         return flatten(toList(self), new ArrayList());
     }
 
-    /**
-     * Flatten an array. This array and any nested arrays or
-     * collections have their contents (recursively) added to the new collection.
-     *
-     * @param self a boolean Array to flatten
-     * @return a flattened Collection
-     * @since 1.6.0
-     */
+    @Deprecated
     public static Collection flatten(boolean[] self) {
         return flatten(toList(self), new ArrayList());
     }
 
-    /**
-     * Flatten an array. This array and any nested arrays or
-     * collections have their contents (recursively) added to the new collection.
-     *
-     * @param self a byte Array to flatten
-     * @return a flattened Collection
-     * @since 1.6.0
-     */
+    @Deprecated
     public static Collection flatten(byte[] self) {
         return flatten(toList(self), new ArrayList());
     }
 
-    /**
-     * Flatten an array. This array and any nested arrays or
-     * collections have their contents (recursively) added to the new collection.
-     *
-     * @param self a char Array to flatten
-     * @return a flattened Collection
-     * @since 1.6.0
-     */
+    @Deprecated
     public static Collection flatten(char[] self) {
         return flatten(toList(self), new ArrayList());
     }
 
-    /**
-     * Flatten an array. This array and any nested arrays or
-     * collections have their contents (recursively) added to the new collection.
-     *
-     * @param self a short Array to flatten
-     * @return a flattened Collection
-     * @since 1.6.0
-     */
+    @Deprecated
     public static Collection flatten(short[] self) {
         return flatten(toList(self), new ArrayList());
     }
 
-    /**
-     * Flatten an array. This array and any nested arrays or
-     * collections have their contents (recursively) added to the new collection.
-     *
-     * @param self an int Array to flatten
-     * @return a flattened Collection
-     * @since 1.6.0
-     */
+    @Deprecated
     public static Collection flatten(int[] self) {
         return flatten(toList(self), new ArrayList());
     }
 
-    /**
-     * Flatten an array. This array and any nested arrays or
-     * collections have their contents (recursively) added to the new collection.
-     *
-     * @param self a long Array to flatten
-     * @return a flattened Collection
-     * @since 1.6.0
-     */
+
+    @Deprecated
     public static Collection flatten(long[] self) {
         return flatten(toList(self), new ArrayList());
     }
 
-    /**
-     * Flatten an array. This array and any nested arrays or
-     * collections have their contents (recursively) added to the new collection.
-     *
-     * @param self a float Array to flatten
-     * @return a flattened Collection
-     * @since 1.6.0
-     */
+    @Deprecated
     public static Collection flatten(float[] self) {
         return flatten(toList(self), new ArrayList());
     }
 
-    /**
-     * Flatten an array. This array and any nested arrays or
-     * collections have their contents (recursively) added to the new collection.
-     *
-     * @param self a double Array to flatten
-     * @return a flattened Collection
-     * @since 1.6.0
-     */
+    @Deprecated
     public static Collection flatten(double[] self) {
         return flatten(toList(self), new ArrayList());
     }
@@ -13763,439 +14151,164 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
         return NumberMath.rightShiftUnsigned(self, operand);
     }
 
-    //-------------------------------------------------------------------------
-    // Primitive type array methods
-
-    /**
-     * Support the subscript operator with a range for a byte array
-     *
-     * @param array a byte array
-     * @param range a range indicating the indices for the items to retrieve
-     * @return list of the retrieved bytes
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Byte> getAt(byte[] array, Range range) {
-        return primitiveArrayGet(array, range);
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with a range for a char array
-     *
-     * @param array a char array
-     * @param range a range indicating the indices for the items to retrieve
-     * @return list of the retrieved chars
-     * @since 1.5.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Character> getAt(char[] array, Range range) {
-        return primitiveArrayGet(array, range);
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with a range for a short array
-     *
-     * @param array a short array
-     * @param range a range indicating the indices for the items to retrieve
-     * @return list of the retrieved shorts
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Short> getAt(short[] array, Range range) {
-        return primitiveArrayGet(array, range);
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with a range for an int array
-     *
-     * @param array an int array
-     * @param range a range indicating the indices for the items to retrieve
-     * @return list of the ints at the given indices
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Integer> getAt(int[] array, Range range) {
-        return primitiveArrayGet(array, range);
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with a range for a long array
-     *
-     * @param array a long array
-     * @param range a range indicating the indices for the items to retrieve
-     * @return list of the retrieved longs
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Long> getAt(long[] array, Range range) {
-        return primitiveArrayGet(array, range);
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with a range for a float array
-     *
-     * @param array a float array
-     * @param range a range indicating the indices for the items to retrieve
-     * @return list of the retrieved floats
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Float> getAt(float[] array, Range range) {
-        return primitiveArrayGet(array, range);
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with a range for a double array
-     *
-     * @param array a double array
-     * @param range a range indicating the indices for the items to retrieve
-     * @return list of the retrieved doubles
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Double> getAt(double[] array, Range range) {
-        return primitiveArrayGet(array, range);
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with a range for a boolean array
-     *
-     * @param array a boolean array
-     * @param range a range indicating the indices for the items to retrieve
-     * @return list of the retrieved booleans
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Boolean> getAt(boolean[] array, Range range) {
-        return primitiveArrayGet(array, range);
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with an IntRange for a byte array
-     *
-     * @param array a byte array
-     * @param range an IntRange indicating the indices for the items to retrieve
-     * @return list of the retrieved bytes
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Byte> getAt(byte[] array, IntRange range) {
-        RangeInfo info = subListBorders(array.length, range);
-        List<Byte> answer = primitiveArrayGet(array, subListRange(info, range));
-        return info.reverse ? reverse(answer) : answer;
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with an IntRange for a char array
-     *
-     * @param array a char array
-     * @param range an IntRange indicating the indices for the items to retrieve
-     * @return list of the retrieved chars
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Character> getAt(char[] array, IntRange range) {
-        RangeInfo info = subListBorders(array.length, range);
-        List<Character> answer = primitiveArrayGet(array, subListRange(info, range));
-        return info.reverse ? reverse(answer) : answer;
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with an IntRange for a short array
-     *
-     * @param array a short array
-     * @param range an IntRange indicating the indices for the items to retrieve
-     * @return list of the retrieved shorts
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Short> getAt(short[] array, IntRange range) {
-        RangeInfo info = subListBorders(array.length, range);
-        List<Short> answer = primitiveArrayGet(array, subListRange(info, range));
-        return info.reverse ? reverse(answer) : answer;
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with an IntRange for an int array
-     *
-     * @param array an int array
-     * @param range an IntRange indicating the indices for the items to retrieve
-     * @return list of the retrieved ints
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Integer> getAt(int[] array, IntRange range) {
-        RangeInfo info = subListBorders(array.length, range);
-        List<Integer> answer = primitiveArrayGet(array, subListRange(info, range));
-        return info.reverse ? reverse(answer) : answer;
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with an IntRange for a long array
-     *
-     * @param array a long array
-     * @param range an IntRange indicating the indices for the items to retrieve
-     * @return list of the retrieved longs
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Long> getAt(long[] array, IntRange range) {
-        RangeInfo info = subListBorders(array.length, range);
-        List<Long> answer = primitiveArrayGet(array, subListRange(info, range));
-        return info.reverse ? reverse(answer) : answer;
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with an IntRange for a float array
-     *
-     * @param array a float array
-     * @param range an IntRange indicating the indices for the items to retrieve
-     * @return list of the retrieved floats
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Float> getAt(float[] array, IntRange range) {
-        RangeInfo info = subListBorders(array.length, range);
-        List<Float> answer = primitiveArrayGet(array, subListRange(info, range));
-        return info.reverse ? reverse(answer) : answer;
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with an IntRange for a double array
-     *
-     * @param array a double array
-     * @param range an IntRange indicating the indices for the items to retrieve
-     * @return list of the retrieved doubles
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Double> getAt(double[] array, IntRange range) {
-        RangeInfo info = subListBorders(array.length, range);
-        List<Double> answer = primitiveArrayGet(array, subListRange(info, range));
-        return info.reverse ? reverse(answer) : answer;
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with an IntRange for a boolean array
-     *
-     * @param array a boolean array
-     * @param range an IntRange indicating the indices for the items to retrieve
-     * @return list of the retrieved booleans
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Boolean> getAt(boolean[] array, IntRange range) {
-        RangeInfo info = subListBorders(array.length, range);
-        List<Boolean> answer = primitiveArrayGet(array, subListRange(info, range));
-        return info.reverse ? reverse(answer) : answer;
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with an ObjectRange for a byte array
-     *
-     * @param array a byte array
-     * @param range an ObjectRange indicating the indices for the items to retrieve
-     * @return list of the retrieved bytes
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Byte> getAt(byte[] array, ObjectRange range) {
-        return primitiveArrayGet(array, range);
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with an ObjectRange for a char array
-     *
-     * @param array a char array
-     * @param range an ObjectRange indicating the indices for the items to retrieve
-     * @return list of the retrieved chars
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Character> getAt(char[] array, ObjectRange range) {
-        return primitiveArrayGet(array, range);
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with an ObjectRange for a short array
-     *
-     * @param array a short array
-     * @param range an ObjectRange indicating the indices for the items to retrieve
-     * @return list of the retrieved shorts
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Short> getAt(short[] array, ObjectRange range) {
-        return primitiveArrayGet(array, range);
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with an ObjectRange for an int array
-     *
-     * @param array an int array
-     * @param range an ObjectRange indicating the indices for the items to retrieve
-     * @return list of the retrieved ints
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Integer> getAt(int[] array, ObjectRange range) {
-        return primitiveArrayGet(array, range);
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with an ObjectRange for a long array
-     *
-     * @param array a long array
-     * @param range an ObjectRange indicating the indices for the items to retrieve
-     * @return list of the retrieved longs
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Long> getAt(long[] array, ObjectRange range) {
-        return primitiveArrayGet(array, range);
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with an ObjectRange for a float array
-     *
-     * @param array a float array
-     * @param range an ObjectRange indicating the indices for the items to retrieve
-     * @return list of the retrieved floats
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Float> getAt(float[] array, ObjectRange range) {
-        return primitiveArrayGet(array, range);
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with an ObjectRange for a double array
-     *
-     * @param array a double array
-     * @param range an ObjectRange indicating the indices for the items to retrieve
-     * @return list of the retrieved doubles
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Double> getAt(double[] array, ObjectRange range) {
-        return primitiveArrayGet(array, range);
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with an ObjectRange for a byte array
-     *
-     * @param array a byte array
-     * @param range an ObjectRange indicating the indices for the items to retrieve
-     * @return list of the retrieved bytes
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Boolean> getAt(boolean[] array, ObjectRange range) {
-        return primitiveArrayGet(array, range);
+        return ArrayGroovyMethods.getAt(array, range);
     }
 
-    /**
-     * Support the subscript operator with a collection for a byte array
-     *
-     * @param array a byte array
-     * @param indices a collection of indices for the items to retrieve
-     * @return list of the bytes at the given indices
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Byte> getAt(byte[] array, Collection indices) {
-        return primitiveArrayGet(array, indices);
+        return ArrayGroovyMethods.getAt(array, indices);
     }
 
-    /**
-     * Support the subscript operator with a collection for a char array
-     *
-     * @param array a char array
-     * @param indices a collection of indices for the items to retrieve
-     * @return list of the chars at the given indices
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Character> getAt(char[] array, Collection indices) {
-        return primitiveArrayGet(array, indices);
+        return ArrayGroovyMethods.getAt(array, indices);
     }
 
-    /**
-     * Support the subscript operator with a collection for a short array
-     *
-     * @param array a short array
-     * @param indices a collection of indices for the items to retrieve
-     * @return list of the shorts at the given indices
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Short> getAt(short[] array, Collection indices) {
-        return primitiveArrayGet(array, indices);
+        return ArrayGroovyMethods.getAt(array, indices);
     }
 
-    /**
-     * Support the subscript operator with a collection for an int array
-     *
-     * @param array an int array
-     * @param indices a collection of indices for the items to retrieve
-     * @return list of the ints at the given indices
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Integer> getAt(int[] array, Collection indices) {
-        return primitiveArrayGet(array, indices);
+        return ArrayGroovyMethods.getAt(array, indices);
     }
 
-    /**
-     * Support the subscript operator with a collection for a long array
-     *
-     * @param array a long array
-     * @param indices a collection of indices for the items to retrieve
-     * @return list of the longs at the given indices
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Long> getAt(long[] array, Collection indices) {
-        return primitiveArrayGet(array, indices);
+        return ArrayGroovyMethods.getAt(array, indices);
     }
 
-    /**
-     * Support the subscript operator with a collection for a float array
-     *
-     * @param array a float array
-     * @param indices a collection of indices for the items to retrieve
-     * @return list of the floats at the given indices
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Float> getAt(float[] array, Collection indices) {
-        return primitiveArrayGet(array, indices);
+        return ArrayGroovyMethods.getAt(array, indices);
     }
 
-    /**
-     * Support the subscript operator with a collection for a double array
-     *
-     * @param array a double array
-     * @param indices a collection of indices for the items to retrieve
-     * @return list of the doubles at the given indices
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Double> getAt(double[] array, Collection indices) {
-        return primitiveArrayGet(array, indices);
+        return ArrayGroovyMethods.getAt(array, indices);
     }
 
-    /**
-     * Support the subscript operator with a collection for a boolean array
-     *
-     * @param array a boolean array
-     * @param indices a collection of indices for the items to retrieve
-     * @return list of the booleans at the given indices
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Boolean> getAt(boolean[] array, Collection indices) {
-        return primitiveArrayGet(array, indices);
+        return ArrayGroovyMethods.getAt(array, indices);
     }
 
     /**
@@ -14270,300 +14383,124 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
         self.set(index, value);
     }
 
-    /**
-     * Allows arrays to behave similar to collections.
-     * @param array a boolean array
-     * @return the length of the array
-     * @see java.lang.reflect.Array#getLength(java.lang.Object)
-     * @since 1.5.0
-     */
+    @Deprecated
     public static int size(boolean[] array) {
         return Array.getLength(array);
     }
 
-    /**
-     * Allows arrays to behave similar to collections.
-     * @param array a byte array
-     * @return the length of the array
-     * @see java.lang.reflect.Array#getLength(java.lang.Object)
-     * @since 1.0
-     */
+    @Deprecated
     public static int size(byte[] array) {
         return Array.getLength(array);
     }
 
-    /**
-     * Allows arrays to behave similar to collections.
-     * @param array a char array
-     * @return the length of the array
-     * @see java.lang.reflect.Array#getLength(java.lang.Object)
-     * @since 1.0
-     */
+    @Deprecated
     public static int size(char[] array) {
         return Array.getLength(array);
     }
 
-    /**
-     * Allows arrays to behave similar to collections.
-     * @param array a short array
-     * @return the length of the array
-     * @see java.lang.reflect.Array#getLength(java.lang.Object)
-     * @since 1.0
-     */
+    @Deprecated
     public static int size(short[] array) {
         return Array.getLength(array);
     }
 
-    /**
-     * Allows arrays to behave similar to collections.
-     * @param array an int array
-     * @return the length of the array
-     * @see java.lang.reflect.Array#getLength(java.lang.Object)
-     * @since 1.0
-     */
+    @Deprecated
     public static int size(int[] array) {
         return Array.getLength(array);
     }
 
-    /**
-     * Allows arrays to behave similar to collections.
-     * @param array a long array
-     * @return the length of the array
-     * @see java.lang.reflect.Array#getLength(java.lang.Object)
-     * @since 1.0
-     */
+    @Deprecated
     public static int size(long[] array) {
         return Array.getLength(array);
     }
 
-    /**
-     * Allows arrays to behave similar to collections.
-     * @param array a float array
-     * @return the length of the array
-     * @see java.lang.reflect.Array#getLength(java.lang.Object)
-     * @since 1.0
-     */
+    @Deprecated
     public static int size(float[] array) {
         return Array.getLength(array);
     }
 
-    /**
-     * Allows arrays to behave similar to collections.
-     * @param array a double array
-     * @return the length of the array
-     * @see java.lang.reflect.Array#getLength(java.lang.Object)
-     * @since 1.0
-     */
+    @Deprecated
     public static int size(double[] array) {
         return Array.getLength(array);
     }
 
-    /**
-     * Converts this array to a List of the same size, with each element
-     * added to the list.
-     *
-     * @param array a byte array
-     * @return a list containing the contents of this array.
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Byte> toList(byte[] array) {
-        return DefaultTypeTransformation.primitiveArrayToList(array);
+        return ArrayGroovyMethods.toList(array);
     }
 
-    /**
-     * Converts this array to a List of the same size, with each element
-     * added to the list.
-     *
-     * @param array a boolean array
-     * @return a list containing the contents of this array.
-     * @since 1.6.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Boolean> toList(boolean[] array) {
-        return DefaultTypeTransformation.primitiveArrayToList(array);
+        return ArrayGroovyMethods.toList(array);
     }
 
-    /**
-     * Converts this array to a List of the same size, with each element
-     * added to the list.
-     *
-     * @param array a char array
-     * @return a list containing the contents of this array.
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Character> toList(char[] array) {
-        return DefaultTypeTransformation.primitiveArrayToList(array);
+        return ArrayGroovyMethods.toList(array);
     }
 
-    /**
-     * Converts this array to a List of the same size, with each element
-     * added to the list.
-     *
-     * @param array a short array
-     * @return a list containing the contents of this array.
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Short> toList(short[] array) {
-        return DefaultTypeTransformation.primitiveArrayToList(array);
+        return ArrayGroovyMethods.toList(array);
     }
 
-    /**
-     * Converts this array to a List of the same size, with each element
-     * added to the list.
-     *
-     * @param array an int array
-     * @return a list containing the contents of this array.
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Integer> toList(int[] array) {
-        return DefaultTypeTransformation.primitiveArrayToList(array);
+        return ArrayGroovyMethods.toList(array);
     }
 
-    /**
-     * Converts this array to a List of the same size, with each element
-     * added to the list.
-     *
-     * @param array a long array
-     * @return a list containing the contents of this array.
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Long> toList(long[] array) {
-        return DefaultTypeTransformation.primitiveArrayToList(array);
+        return ArrayGroovyMethods.toList(array);
     }
 
-    /**
-     * Converts this array to a List of the same size, with each element
-     * added to the list.
-     *
-     * @param array a float array
-     * @return a list containing the contents of this array.
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Float> toList(float[] array) {
-        return DefaultTypeTransformation.primitiveArrayToList(array);
+        return ArrayGroovyMethods.toList(array);
     }
 
-    /**
-     * Converts this array to a List of the same size, with each element
-     * added to the list.
-     *
-     * @param array a double array
-     * @return a list containing the contents of this array.
-     * @since 1.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static List<Double> toList(double[] array) {
-        return DefaultTypeTransformation.primitiveArrayToList(array);
+        return ArrayGroovyMethods.toList(array);
     }
 
-    /**
-     * Converts this array to a Set, with each unique element
-     * added to the set.
-     *
-     * @param array a byte array
-     * @return a set containing the unique contents of this array.
-     * @since 1.8.0
-     */
-    @SuppressWarnings("unchecked")
-    public static Set<Byte> toSet(byte[] array) {
-        return toSet(DefaultTypeTransformation.primitiveArrayToUnmodifiableList(array));
-    }
-
-    /**
-     * Converts this array to a Set, with each unique element
-     * added to the set.
-     *
-     * @param array a boolean array
-     * @return a set containing the unique contents of this array.
-     * @since 1.8.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static Set<Boolean> toSet(boolean[] array) {
-        return toSet(DefaultTypeTransformation.primitiveArrayToUnmodifiableList(array));
+        return ArrayGroovyMethods.toSet(array);
     }
 
-    /**
-     * Converts this array to a Set, with each unique element
-     * added to the set.
-     *
-     * @param array a char array
-     * @return a set containing the unique contents of this array.
-     * @since 1.8.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
+    public static Set<Byte> toSet(byte[] array) {
+        return ArrayGroovyMethods.toSet(array);
+    }
+
+    @Deprecated
     public static Set<Character> toSet(char[] array) {
-        return toSet(DefaultTypeTransformation.primitiveArrayToUnmodifiableList(array));
+        return ArrayGroovyMethods.toSet(array);
     }
 
-    /**
-     * Converts this array to a Set, with each unique element
-     * added to the set.
-     *
-     * @param array a short array
-     * @return a set containing the unique contents of this array.
-     * @since 1.8.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static Set<Short> toSet(short[] array) {
-        return toSet(DefaultTypeTransformation.primitiveArrayToUnmodifiableList(array));
+        return ArrayGroovyMethods.toSet(array);
     }
 
-    /**
-     * Converts this array to a Set, with each unique element
-     * added to the set.
-     *
-     * @param array an int array
-     * @return a set containing the unique contents of this array.
-     * @since 1.8.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static Set<Integer> toSet(int[] array) {
-        return toSet(DefaultTypeTransformation.primitiveArrayToUnmodifiableList(array));
+        return ArrayGroovyMethods.toSet(array);
     }
 
-    /**
-     * Converts this array to a Set, with each unique element
-     * added to the set.
-     *
-     * @param array a long array
-     * @return a set containing the unique contents of this array.
-     * @since 1.8.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static Set<Long> toSet(long[] array) {
-        return toSet(DefaultTypeTransformation.primitiveArrayToUnmodifiableList(array));
+        return ArrayGroovyMethods.toSet(array);
     }
 
-    /**
-     * Converts this array to a Set, with each unique element
-     * added to the set.
-     *
-     * @param array a float array
-     * @return a set containing the unique contents of this array.
-     * @since 1.8.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static Set<Float> toSet(float[] array) {
-        return toSet(DefaultTypeTransformation.primitiveArrayToUnmodifiableList(array));
+        return ArrayGroovyMethods.toSet(array);
     }
 
-    /**
-     * Converts this array to a Set, with each unique element
-     * added to the set.
-     *
-     * @param array a double array
-     * @return a set containing the unique contents of this array.
-     * @since 1.8.0
-     */
-    @SuppressWarnings("unchecked")
+    @Deprecated
     public static Set<Double> toSet(double[] array) {
-        return toSet(DefaultTypeTransformation.primitiveArrayToUnmodifiableList(array));
+        return ArrayGroovyMethods.toSet(array);
     }
 
     /**
@@ -14645,6 +14582,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      * @return the returned value from the array
      * @since 1.5.0
      */
+    @Deprecated
     protected static Object primitiveArrayGet(Object self, int idx) {
         return Array.get(self, normaliseIndex(idx, Array.getLength(self)));
     }
@@ -14658,6 +14596,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      * @since 1.5.0
      */
     @SuppressWarnings("unchecked")
+    @Deprecated
     protected static List primitiveArrayGet(Object self, Range range) {
         List answer = new ArrayList();
         for (Object next : range) {
@@ -14678,6 +14617,7 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
      * @since 1.0
      */
     @SuppressWarnings("unchecked")
+    @Deprecated
     protected static List primitiveArrayGet(Object self, Collection indices) {
         List answer = new ArrayList();
         for (Object value : indices) {
@@ -14718,124 +14658,44 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
         return self;
     }
 
-    /**
-     * Checks whether the array contains the given value.
-     *
-     * @param self  the array we are searching
-     * @param value the value being searched for
-     * @return true if the array contains the value
-     * @since 1.8.6
-     */
-    public static boolean contains(int[] self, Object value) {
-        for (int next : self) {
-            if (DefaultTypeTransformation.compareEqual(value, next)) return true;
-        }
-        return false;
-    }
-
-    /**
-     * Checks whether the array contains the given value.
-     *
-     * @param self  the array we are searching
-     * @param value the value being searched for
-     * @return true if the array contains the value
-     * @since 1.8.6
-     */
-    public static boolean contains(long[] self, Object value) {
-        for (long next : self) {
-            if (DefaultTypeTransformation.compareEqual(value, next)) return true;
-        }
-        return false;
-    }
-
-    /**
-     * Checks whether the array contains the given value.
-     *
-     * @param self  the array we are searching
-     * @param value the value being searched for
-     * @return true if the array contains the value
-     * @since 1.8.6
-     */
-    public static boolean contains(short[] self, Object value) {
-        for (short next : self) {
-            if (DefaultTypeTransformation.compareEqual(value, next)) return true;
-        }
-        return false;
-    }
-
-    /**
-     * Checks whether the array contains the given value.
-     *
-     * @param self  the array we are searching
-     * @param value the value being searched for
-     * @return true if the array contains the value
-     * @since 1.8.6
-     */
-    public static boolean contains(char[] self, Object value) {
-        for (char next : self) {
-            if (DefaultTypeTransformation.compareEqual(value, next)) return true;
-        }
-        return false;
-    }
-
-    /**
-     * Checks whether the array contains the given value.
-     *
-     * @param self  the array within which we count the number of occurrences
-     * @param value the value being searched for
-     * @return the number of occurrences
-     * @since 1.8.6
-     */
+    @Deprecated
     public static boolean contains(boolean[] self, Object value) {
-        for (boolean next : self) {
-            if (DefaultTypeTransformation.compareEqual(value, next)) return true;
-        }
-        return false;
+        return ArrayGroovyMethods.contains(self, value);
     }
 
-    /**
-     * Checks whether the array contains the given value.
-     *
-     * @param self  the array we are searching
-     * @param value the value being searched for
-     * @return true if the array contains the value
-     * @since 1.8.6
-     */
-    public static boolean contains(double[] self, Object value) {
-        for (double next : self) {
-            if (DefaultTypeTransformation.compareEqual(value, next)) return true;
-        }
-        return false;
-    }
-
-    /**
-     * Checks whether the array contains the given value.
-     *
-     * @param self  the array we are searching
-     * @param value the value being searched for
-     * @return true if the array contains the value
-     * @since 1.8.6
-     */
-    public static boolean contains(float[] self, Object value) {
-        for (float next : self) {
-            if (DefaultTypeTransformation.compareEqual(value, next)) return true;
-        }
-        return false;
-    }
-
-    /**
-     * Checks whether the array contains the given value.
-     *
-     * @param self  the array we are searching
-     * @param value the value being searched for
-     * @return true if the array contains the value
-     * @since 1.8.6
-     */
+    @Deprecated
     public static boolean contains(byte[] self, Object value) {
-        for (byte next : self) {
-            if (DefaultTypeTransformation.compareEqual(value, next)) return true;
-        }
-        return false;
+        return ArrayGroovyMethods.contains(self, value);
+    }
+
+    @Deprecated
+    public static boolean contains(char[] self, Object value) {
+        return ArrayGroovyMethods.contains(self, value);
+    }
+
+    @Deprecated
+    public static boolean contains(short[] self, Object value) {
+        return ArrayGroovyMethods.contains(self, value);
+    }
+
+    @Deprecated
+    public static boolean contains(int[] self, Object value) {
+        return ArrayGroovyMethods.contains(self, value);
+    }
+
+    @Deprecated
+    public static boolean contains(long[] self, Object value) {
+        return ArrayGroovyMethods.contains(self, value);
+    }
+
+    @Deprecated
+    public static boolean contains(float[] self, Object value) {
+        return ArrayGroovyMethods.contains(self, value);
+    }
+
+    @Deprecated
+    public static boolean contains(double[] self, Object value) {
+        return ArrayGroovyMethods.contains(self, value);
     }
 
     /**
@@ -17805,172 +17665,44 @@ public class DefaultGroovyMethods extends DefaultGroovyMethodsSupport {
         return self;
     }
 
-    /**
-     * Swaps two elements at the specified positions.
-     * <p>
-     * Example:
-     * <pre class="groovyTestCase">
-     * assert ([false, true, false, true] as boolean[]) == ([false, false, true, true] as boolean[]).swap(1, 2)
-     * </pre>
-     *
-     * @param self a boolean array
-     * @param i a position
-     * @param j a position
-     * @return self
-     * @since 2.4.0
-     */
+    @Deprecated
     public static boolean[] swap(boolean[] self, int i, int j) {
-        boolean tmp = self[i];
-        self[i] = self[j];
-        self[j] = tmp;
-        return self;
+        return ArrayGroovyMethods.swap(self, i,  j);
     }
 
-    /**
-     * Swaps two elements at the specified positions.
-     * <p>
-     * Example:
-     * <pre class="groovyTestCase">
-     * assert ([1, 3, 2, 4] as byte[]) == ([1, 2, 3, 4] as byte[]).swap(1, 2)
-     * </pre>
-     *
-     * @param self a boolean array
-     * @param i a position
-     * @param j a position
-     * @return self
-     * @since 2.4.0
-     */
+    @Deprecated
     public static byte[] swap(byte[] self, int i, int j) {
-        byte tmp = self[i];
-        self[i] = self[j];
-        self[j] = tmp;
-        return self;
+        return ArrayGroovyMethods.swap(self, i,  j);
     }
 
-    /**
-     * Swaps two elements at the specified positions.
-     * <p>
-     * Example:
-     * <pre class="groovyTestCase">
-     * assert ([1, 3, 2, 4] as char[]) == ([1, 2, 3, 4] as char[]).swap(1, 2)
-     * </pre>
-     *
-     * @param self a boolean array
-     * @param i a position
-     * @param j a position
-     * @return self
-     * @since 2.4.0
-     */
+    @Deprecated
     public static char[] swap(char[] self, int i, int j) {
-        char tmp = self[i];
-        self[i] = self[j];
-        self[j] = tmp;
-        return self;
+        return ArrayGroovyMethods.swap(self, i,  j);
     }
 
-    /**
-     * Swaps two elements at the specified positions.
-     * <p>
-     * Example:
-     * <pre class="groovyTestCase">
-     * assert ([1, 3, 2, 4] as double[]) == ([1, 2, 3, 4] as double[]).swap(1, 2)
-     * </pre>
-     *
-     * @param self a boolean array
-     * @param i a position
-     * @param j a position
-     * @return self
-     * @since 2.4.0
-     */
+    @Deprecated
     public static double[] swap(double[] self, int i, int j) {
-        double tmp = self[i];
-        self[i] = self[j];
-        self[j] = tmp;
-        return self;
+        return ArrayGroovyMethods.swap(self, i,  j);
     }
 
-    /**
-     * Swaps two elements at the specified positions.
-     * <p>
-     * Example:
-     * <pre class="groovyTestCase">
-     * assert ([1, 3, 2, 4] as float[]) == ([1, 2, 3, 4] as float[]).swap(1, 2)
-     * </pre>
-     *
-     * @param self a boolean array
-     * @param i a position
-     * @param j a position
-     * @return self
-     * @since 2.4.0
-     */
+    @Deprecated
     public static float[] swap(float[] self, int i, int j) {
-        float tmp = self[i];
-        self[i] = self[j];
-        self[j] = tmp;
-        return self;
+        return ArrayGroovyMethods.swap(self, i,  j);
     }
 
-    /**
-     * Swaps two elements at the specified positions.
-     * <p>
-     * Example:
-     * <pre class="groovyTestCase">
-     * assert ([1, 3, 2, 4] as int[]) == ([1, 2, 3, 4] as int[]).swap(1, 2)
-     * </pre>
-     *
-     * @param self a boolean array
-     * @param i a position
-     * @param j a position
-     * @return self
-     * @since 2.4.0
-     */
+    @Deprecated
     public static int[] swap(int[] self, int i, int j) {
-        int tmp = self[i];
-        self[i] = self[j];
-        self[j] = tmp;
-        return self;
+        return ArrayGroovyMethods.swap(self, i,  j);
     }
 
-    /**
-     * Swaps two elements at the specified positions.
-     * <p>
-     * Example:
-     * <pre class="groovyTestCase">
-     * assert ([1, 3, 2, 4] as long[]) == ([1, 2, 3, 4] as long[]).swap(1, 2)
-     * </pre>
-     *
-     * @param self a boolean array
-     * @param i a position
-     * @param j a position
-     * @return self
-     * @since 2.4.0
-     */
+    @Deprecated
     public static long[] swap(long[] self, int i, int j) {
-        long tmp = self[i];
-        self[i] = self[j];
-        self[j] = tmp;
-        return self;
+        return ArrayGroovyMethods.swap(self, i,  j);
     }
 
-    /**
-     * Swaps two elements at the specified positions.
-     * <p>
-     * Example:
-     * <pre class="groovyTestCase">
-     * assert ([1, 3, 2, 4] as short[]) == ([1, 2, 3, 4] as short[]).swap(1, 2)
-     * </pre>
-     *
-     * @param self a boolean array
-     * @param i a position
-     * @param j a position
-     * @return self
-     * @since 2.4.0
-     */
+    @Deprecated
     public static short[] swap(short[] self, int i, int j) {
-        short tmp = self[i];
-        self[i] = self[j];
-        self[j] = tmp;
-        return self;
+        return ArrayGroovyMethods.swap(self, i,  j);
     }
 
     /**

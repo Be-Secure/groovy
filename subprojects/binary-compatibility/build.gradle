@@ -1,5 +1,3 @@
-import me.champeau.gradle.japicmp.JapicmpTask
-
 /*
  *  Licensed to the Apache Software Foundation (ASF) under one
  *  or more contributor license agreements.  See the NOTICE file
@@ -18,6 +16,8 @@ import me.champeau.gradle.japicmp.JapicmpTask
  *  specific language governing permissions and limitations
  *  under the License.
  */
+import me.champeau.gradle.japicmp.JapicmpTask
+
 plugins {
     id "me.champeau.gradle.japicmp" version "0.4.1"
     id 'org.apache.groovy-aggregating-project'
@@ -42,6 +42,7 @@ rootProject.allprojects {
             def baseline = thisProject.configurations.create("${taskName}Baseline") {
                 dependencies.add(thisProject.dependencies.create(baselineCoords))
             }
+            baseline.resolutionStrategy.disableDependencyVerification()
             def singleProjectCheck = thisProject.tasks.register(taskName, JapicmpTask) {
                 oldArchives.from(baseline)
                 newArchives.from(files(tasks.named("jarjar")))

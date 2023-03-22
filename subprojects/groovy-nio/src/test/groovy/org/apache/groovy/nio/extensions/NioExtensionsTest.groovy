@@ -180,6 +180,36 @@ class NioExtensionsTest extends Specification {
         path.size() == str.size()
     }
 
+    def testPathName() {
+        when:
+        def file = new File(tempFile, 'gradle.properties')
+        def dir = new File(tempFile, 'properties')
+
+        then:
+        file.name == file.toPath().name
+        dir.name == dir.toPath().name
+    }
+
+    def testPathExtension() {
+        when:
+        def filePath = new File(tempFile, 'gradle.properties').toPath()
+        def dirPath = new File(tempFile, 'properties').toPath()
+
+        then:
+        filePath.extension == 'properties'
+        dirPath.extension == ""
+    }
+
+    def testPathBaseName() {
+        when:
+        def filePath = new File(tempFile, 'gradle.properties').toPath()
+        def dirPath = new File(tempFile, 'properties').toPath()
+
+        then:
+        filePath.baseName == 'gradle'
+        dirPath.baseName == 'properties'
+    }
+
     def testNewObjectOutputStream() {
         setup:
         def str = 'Hello world!'
@@ -536,4 +566,20 @@ class NioExtensionsTest extends Specification {
         assert NioExtensions.getBytes(path) == [-2, -1, 0, 72, 0, 101, 0, 108, 0, 108, 0, 111, 0, 32, 0, 119, 0, 111, 0, 114, 0, 108, 0, 100, 0, 33] as byte[]
     }
 
+    def testAsBoolean() {
+        setup:
+        def path = tempFile.toPath()
+
+        when:
+        path.write('Some text')
+
+        then:
+        assert path
+
+        when:
+        Files.delete(path)
+
+        then:
+        assert !path
+    }
 }

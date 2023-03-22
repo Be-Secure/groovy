@@ -402,11 +402,18 @@ public class InvokerHelper {
         return answer;
     }
 
-    public static void assertFailed(Object expression, Object message) {
+    public static void assertFailed(final Object expression, final Object message) {
+        throw createAssertError(expression, message);
+    }
+
+    /**
+     * @since 4.0.7
+     */
+    public static AssertionError createAssertError(final Object expression, final Object message) {
         if (message == null || "".equals(message)) {
-            throw new PowerAssertionError(expression.toString());
+            return new PowerAssertionError(expression.toString());
         }
-        throw new AssertionError(message + ". Expression: " + expression);
+        return new AssertionError(message + ". Expression: " + expression);
     }
 
     public static Object runScript(Class scriptClass, String[] args) {
@@ -417,30 +424,45 @@ public class InvokerHelper {
 
     static class NullScript extends Script {
 
-        public NullScript() {
-            this(new Binding());
-        }
         public NullScript(Binding context) {
             super(context);
+        }
+
+        public NullScript() {
+            this(new Binding());
         }
 
         @Override
         public Object run() {
             return null;
         }
-
     }
-    public static Script createScript(Class scriptClass, Binding context) {
-        Script script;
 
+    @SuppressWarnings("unchecked")
+    public static Script createScript(final Class scriptClass, final Binding context) {
         if (scriptClass == null) {
-            script = new NullScript(context);
-        } else {
-            try {
-                if (Script.class.isAssignableFrom(scriptClass)) {
-                    script = newScript(scriptClass, context);
-                } else {
-                    // wrap call "ScriptClass.main(args)" with a Script instance
+            return new NullScript(context);
+        }
+
+        try {
+            Script script;
+            if (Script.class.isAssignableFrom(scriptClass)) {
+                script = newScript(scriptClass, context);
+            } else {
+                try {
+                    Class<?> glBinding = scriptClass.getClassLoader().loadClass(Binding.class.getName());
+                    Constructor<?> contextualConstructor = scriptClass.getDeclaredConstructor(glBinding);
+                    Object binding = glBinding.getDeclaredConstructor(Map.class).newInstance(context.getVariables());
+                    Object scriptx = contextualConstructor.newInstance(binding);
+                    // adapt "new ScriptClass(binding).run()" to Script
+                    script = new Script() {
+                        @Override
+                        public Object run() {
+                            return InvokerHelper.invokeMethod(scriptx, "run", EMPTY_ARGUMENTS);
+                        }
+                    };
+                } catch (ClassNotFoundException | NoSuchMethodException | SecurityException ignore) {
+                    // adapt "ScriptClass.main(args)" to Script
                     script = new Script(context) {
                         @Override
                         public Object run() {
@@ -465,11 +487,11 @@ public class InvokerHelper {
                         }
                     });
                 }
-            } catch (Exception e) {
-                throw new GroovyRuntimeException("Failed to create Script instance for class: " + scriptClass + ". Reason: " + e, e);
             }
+            return script;
+        } catch (Exception e) {
+            throw new GroovyRuntimeException("Failed to create Script instance for class: " + scriptClass + ". Reason: " + e, e);
         }
-        return script;
     }
 
     public static Script newScript(Class<? extends Script> scriptClass, Binding context) throws InstantiationException, IllegalAccessException, InvocationTargetException, NoSuchMethodException {
@@ -561,10 +583,13 @@ public class InvokerHelper {
     }
 
     public static MetaClass getMetaClass(Object object) {
-        if (object instanceof GroovyObject)
+        if (object instanceof GroovyObject) {
             return ((GroovyObject) object).getMetaClass();
-        else
+        } else if (object instanceof Class) {
+            return metaRegistry.getMetaClass((Class<?>) object); // GROOVY-10819
+        } else {
             return ((MetaClassRegistryImpl) GroovySystem.getMetaClassRegistry()).getMetaClass(object);
+        }
     }
 
     public static MetaClass getMetaClass(Class cls) {

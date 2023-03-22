@@ -16,14 +16,32 @@
  *  specific language governing permissions and limitations
  *  under the License.
  */
-package groovy.bugs
+package org.codehaus.groovy.ast.stmt
 
-import groovy.test.GroovyTestCase
+import org.junit.Test
 
-// TODO add JVM option `--illegal-access=deny` when all warnings fixed
-class Groovy8339Bug extends GroovyTestCase {
-    void testCase2() {
-        StringBuilder sb = new StringBuilder()
-        sb.setLength(0)
+import static org.codehaus.groovy.ast.tools.GeneralUtils.*
+
+final class IfStatementTest {
+
+    @Test
+    void testGetText() {
+        def stmt = new IfStatement(boolX(constX(true)), block(returnS(nullX())), null)
+
+        assert stmt.text == 'if (true) { return null }'
+    }
+
+    @Test
+    void testGetText2() {
+        def stmt = new IfStatement(boolX(constX(true)), block(), block(returnS(nullX())))
+
+        assert stmt.text == 'if (true) {  } else { return null }'
+    }
+
+    @Test
+    void testGetText3() {
+        def stmt = new IfStatement(boolX(varX('list')), returnS(varX('list')), block(returnS(nullX())))
+
+        assert stmt.text == 'if (list) return list; else { return null }'
     }
 }

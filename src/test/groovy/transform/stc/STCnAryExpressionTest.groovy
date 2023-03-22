@@ -34,27 +34,36 @@ class STCnAryExpressionTest extends StaticTypeCheckingTestCase {
     void testBinaryStringPlusInt() {
         assertScript '''
             String str = 'a'
-            int str2 = 2
-            str+str2
+            int num = 2
+            str+num
         '''
     }
 
     void testBinaryObjectPlusInt() {
         shouldFailWithMessages '''
-            def str = new Object()
-            int str2 = 2
-            str+str2
+            def obj = new Object()
+            int num = 2
+            obj+num
         ''',
         'Cannot find matching method java.lang.Object#plus(int)'
     }
 
     void testBinaryIntPlusObject() {
         shouldFailWithMessages '''
-            def str = new Object()
-            int str2 = 2
-            str2+str
+            def obj = new Object()
+            int num = 2
+            num+obj
         ''',
         'Cannot find matching method int#plus(java.lang.Object)'
+    }
+
+    // GROOVY-10818
+    void testBinaryTimeDurationPlus() {
+        assertScript '''import groovy.time.*
+            TimeDuration td1 = new TimeDuration(0, 1, 20, 43, 0)
+            TimeDuration td2 = new TimeDuration(0, 0, 20, 17, 0)
+            Duration d = td1 + td2
+        '''
     }
 
     void testPrimitiveComparison() {
@@ -138,6 +147,26 @@ class STCnAryExpressionTest extends StaticTypeCheckingTestCase {
             Integer x = 3
             Integer y = 4
             assert (x <=> y) == -1
+        '''
+    }
+
+    // GROOVY-6137, GROOVY-7473, GROOVY-10909
+    void testInOperatorImplicitNullSafetyChecks() {
+        assertScript '''
+            class C {
+                int i = 0
+                int getA() { i++ }
+                boolean isCase(val) { true }
+                boolean isNotCase(val) { false }
+
+                void test() {
+                    assert !(a !in this)
+                    assert i == 1
+                    assert a in this
+                    assert i == 2
+                }
+            }
+            new C().test()
         '''
     }
 
@@ -248,13 +277,13 @@ class STCnAryExpressionTest extends StaticTypeCheckingTestCase {
         shouldFailWithMessages '''
            'abc' < 1
         ''',
-        'Cannot find matching method java.lang.String#compareTo(int)'
+        'Cannot call java.lang.String#compareTo(java.lang.String) with arguments [int]'
     }
 
     void testCompareToCallCheckWithIncompatibleTypesAlsoFailsIfComparableImplemented() {
         shouldFailWithMessages '''
            'abc'.compareTo(1)
         ''',
-        'Cannot find matching method java.lang.String#compareTo(int)'
+        'Cannot call java.lang.String#compareTo(java.lang.String) with arguments [int]'
     }
 }

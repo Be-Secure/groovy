@@ -24,6 +24,7 @@ import org.codehaus.groovy.runtime.memoize.MemoizeCache;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodType;
 import java.lang.invoke.MutableCallSite;
+import java.lang.ref.SoftReference;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
@@ -37,12 +38,12 @@ public class CacheableCallSite extends MutableCallSite {
     private static final int CACHE_SIZE = SystemUtil.getIntegerSafe("groovy.indy.callsite.cache.size", 4);
     private static final float LOAD_FACTOR = 0.75f;
     private static final int INITIAL_CAPACITY = (int) Math.ceil(CACHE_SIZE / LOAD_FACTOR) + 1;
-    private volatile MethodHandleWrapper latestHitMethodHandleWrapper = null;
+    private volatile SoftReference<MethodHandleWrapper> latestHitMethodHandleWrapperSoftReference = null;
     private final AtomicLong fallbackCount = new AtomicLong();
     private MethodHandle defaultTarget;
     private MethodHandle fallbackTarget;
-    private final Map<String, MethodHandleWrapper> lruCache =
-            new LinkedHashMap<String, MethodHandleWrapper>(INITIAL_CAPACITY, LOAD_FACTOR, true) {
+    private final Map<String, SoftReference<MethodHandleWrapper>> lruCache =
+            new LinkedHashMap<String, SoftReference<MethodHandleWrapper>>(INITIAL_CAPACITY, LOAD_FACTOR, true) {
                 private static final long serialVersionUID = 7785958879964294463L;
 
                 @Override
@@ -56,19 +57,30 @@ public class CacheableCallSite extends MutableCallSite {
     }
 
     public MethodHandleWrapper getAndPut(String className, MemoizeCache.ValueProvider<? super String, ? extends MethodHandleWrapper> valueProvider) {
-        final MethodHandleWrapper result;
+        MethodHandleWrapper result = null;
+        SoftReference<MethodHandleWrapper> resultSoftReference;
         synchronized (lruCache) {
-            result = lruCache.computeIfAbsent(className, valueProvider::provide);
-        }
-        final MethodHandleWrapper lhmh = latestHitMethodHandleWrapper;
+            resultSoftReference = lruCache.get(className);
+            if (null != resultSoftReference) {
+                result = resultSoftReference.get();
+                if (null == result) removeAllStaleEntriesOfLruCache();
+            }
 
-        if (lhmh == result) {
+            if (null == result) {
+                result = valueProvider.provide(className);
+                resultSoftReference = new SoftReference<>(result);
+                lruCache.put(className, resultSoftReference);
+            }
+        }
+        final SoftReference<MethodHandleWrapper> mhwsr = latestHitMethodHandleWrapperSoftReference;
+        final MethodHandleWrapper methodHandleWrapper = null == mhwsr ? null : mhwsr.get();
+
+        if (methodHandleWrapper == result) {
             result.incrementLatestHitCount();
         } else {
             result.resetLatestHitCount();
-            if (null != lhmh) lhmh.resetLatestHitCount();
-
-            latestHitMethodHandleWrapper = result;
+            if (null != methodHandleWrapper) methodHandleWrapper.resetLatestHitCount();
+            latestHitMethodHandleWrapperSoftReference = resultSoftReference;
         }
 
         return result;
@@ -76,8 +88,17 @@ public class CacheableCallSite extends MutableCallSite {
 
     public MethodHandleWrapper put(String name, MethodHandleWrapper mhw) {
         synchronized (lruCache) {
-            return lruCache.put(name, mhw);
+            final SoftReference<MethodHandleWrapper> methodHandleWrapperSoftReference;
+            methodHandleWrapperSoftReference = lruCache.put(name, new SoftReference<>(mhw));
+            if (null == methodHandleWrapperSoftReference) return null;
+            final MethodHandleWrapper methodHandleWrapper = methodHandleWrapperSoftReference.get();
+            if (null == methodHandleWrapper) removeAllStaleEntriesOfLruCache();
+            return methodHandleWrapper;
         }
+    }
+
+    private void removeAllStaleEntriesOfLruCache() {
+        lruCache.values().removeIf(v -> null == v.get());
     }
 
     public long incrementFallbackCount() {

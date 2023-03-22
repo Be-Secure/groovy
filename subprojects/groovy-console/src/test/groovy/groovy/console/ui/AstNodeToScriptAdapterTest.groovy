@@ -287,7 +287,7 @@ final class AstNodeToScriptAdapterTest extends GroovyTestCase {
                         ['foo': 'bar', 'baz': bif + qux]'''
 
         String result = compileToScript(script, CompilePhase.SEMANTIC_ANALYSIS)
-        assert result.contains("['foo', \"\$bar\", x , java.lang.Math.min(5, 3)]")
+        assert result.contains("['foo', \"\$bar\", x, java.lang.Math.min(5, 3)]")
         assert result.contains("((['foo', \"\$bar\"]) as java.lang.String[])")
         assert result.contains("['foo': 'bar', 'baz': bif + qux ]")
     }
@@ -622,14 +622,16 @@ final class AstNodeToScriptAdapterTest extends GroovyTestCase {
     }
 
     void testLazyAnnotation() {
-        String script = '''class Event {
+        String script = '''
+            class Event {
                 @Lazy ArrayList speakers
-            }'''
+            }
+        '''
 
         String result = compileToScript(script, CompilePhase.CANONICALIZATION)
         assert result =~ /Lazy\s*private java\.util\.ArrayList .*speakers /
         assert result.contains('public java.util.ArrayList getSpeakers() {')
-        assert result.contains('if ($speakers != null) {')
+        assert result.contains('if ($speakers != null') || result.contains('if (null != $speakers')
         assert result.contains('$speakers = new java.util.ArrayList()')
     }
 
@@ -866,8 +868,8 @@ final class AstNodeToScriptAdapterTest extends GroovyTestCase {
         String result = compileToScript(script, CompilePhase.SEMANTIC_ANALYSIS)
         assert result.contains('java.lang.Object c1 = new MyClass()')
         assert result.contains('java.lang.Object c2 = new MyClass()')
-        assert result.contains('assert [ c1 , c2 ]*.getA() == [c1.getA(), c2.getA()] : null')
-        assert result.contains("assert [ c1 , c2 ]*.getA() == ['abc', 'abc'] : null")
+        assert result.contains('assert [c1, c2]*.getA() == [c1.getA(), c2.getA()] : null')
+        assert result.contains("assert [c1, c2]*.getA() == ['abc', 'abc'] : null")
     }
 
     void testVisitSafeMethodCall() {

@@ -73,9 +73,12 @@ class PerformanceTestsExtension {
 
     void version(String v) {
         def version = v.replace('.', '_')
-        def groovyConf = configurations.create("groovyVersion$version") { Configuration it ->
+        def groovyConf = configurations.create("perfGroovy$version") { Configuration it ->
             it.canBeResolved = true
             it.canBeConsumed = false
+            it.resolutionStrategy {
+                disableDependencyVerification()
+            }
             it.extendsFrom(configurations.getByName("stats"))
             it.attributes {
                 it.attribute(Category.CATEGORY_ATTRIBUTE, objects.named(Category, Category.LIBRARY))
@@ -93,15 +96,15 @@ class PerformanceTestsExtension {
             it.dependencies.add(dependencies.create(v == 'current' ? dependencies.project([path: ':groovy-xml']) : (v.startsWith('4') ? "org.apache.groovy:groovy-xml:$v" : "org.codehaus.groovy:groovy-xml:$v")))
             it.dependencies.add(dependencies.create(v == 'current' ? dependencies.project([path: ':groovy-templates']) : (v.startsWith('4') ? "org.apache.groovy:groovy-templates:$v" : "org.codehaus.groovy:groovy-templates:$v")))
             it.dependencies.add(dependencies.create('org.cyberneko:html:1.9.8'))
-            it.dependencies.add(dependencies.create('commons-net:commons-net:3.8.0'))
-            it.dependencies.add(dependencies.create('net.sourceforge.htmlunit:htmlunit:2.63.0'))
+            it.dependencies.add(dependencies.create('commons-net:commons-net:3.9.0'))
+            it.dependencies.add(dependencies.create('net.sourceforge.htmlunit:htmlunit:2.69.0'))
             it.dependencies.add(dependencies.create('berkeleydb:je:3.2.76'))
             it.dependencies.add(dependencies.create('commons-httpclient:commons-httpclient:3.1'))
             it.dependencies.add(dependencies.create('net.sf.jopt-simple:jopt-simple:5.0.4'))
             it.dependencies.add(dependencies.create('com.baulsupp.kolja:jcurses:0.9.5.3'))
-            it.dependencies.add(dependencies.create('mstor:mstor:0.9.9'))
+            it.dependencies.add(dependencies.create('org.mnode.mstor:mstor:1.0.2'))
             it.dependencies.add(dependencies.create('commons-lang:commons-lang:2.6'))
-            it.dependencies.add(dependencies.create('dnsjava:dnsjava:2.1.9'))
+            it.dependencies.add(dependencies.create('dnsjava:dnsjava:3.5.2'))
             it.dependencies.add(dependencies.create('net.sourceforge.expectj:expectj:2.0.7'))
             it.dependencies.add(dependencies.create('jline:jline:2.14.6'))
             it.dependencies.add(dependencies.create('prevayler:prevayler:2.02.005'))

@@ -30,7 +30,7 @@ pluginManagement {
 
 // check https://gradle.com/enterprise/releases with new versions. GE plugin version should not lag behind Gradle version
 plugins {
-    id "com.gradle.enterprise" version "3.11.2"
+    id "com.gradle.enterprise" version "3.12.4"
 }
 
 gradleEnterprise {
@@ -95,8 +95,4 @@ rootProject.children.each { prj ->
 
 rootProject.name = 'groovy'
 
-GradleVersion gradleVersion = GradleVersion.current()
-GradleVersion gradle5_6 = GradleVersion.version('5.6')
-if (gradleVersion >= gradle5_6) {
-    enableFeaturePreview('GROOVY_COMPILATION_AVOIDANCE')
-}
+enableFeaturePreview('GROOVY_COMPILATION_AVOIDANCE')

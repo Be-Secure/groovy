@@ -18,21 +18,18 @@
  */
 package org.codehaus.groovy.ast.stmt
 
-import groovy.test.GroovyTestCase
-import org.codehaus.groovy.ast.ClassNode
-import org.codehaus.groovy.ast.expr.ArgumentListExpression
-import org.codehaus.groovy.ast.expr.ConstantExpression
-import org.codehaus.groovy.ast.expr.ConstructorCallExpression
+import org.codehaus.groovy.ast.ClassHelper
+import org.junit.Test
 
-class ThrowStatementTest extends GroovyTestCase {
+import static org.codehaus.groovy.ast.tools.GeneralUtils.constX
+import static org.codehaus.groovy.ast.tools.GeneralUtils.ctorX
 
+final class ThrowStatementTest {
+
+    @Test
     void testGetText() {
-        assert new ThrowStatement(
-            new ConstructorCallExpression(
-                new ClassNode(Exception),
-                new ArgumentListExpression(
-                    new ConstantExpression('oops')))).
-            text == 'throw new java.lang.Exception(oops)'
-    }
+        def stmt = new ThrowStatement(ctorX(ClassHelper.THROWABLE_TYPE, constX('oops')))
 
+        assert stmt.text == 'throw new java.lang.Throwable(oops)' // TODO: quoted string
+    }
 }

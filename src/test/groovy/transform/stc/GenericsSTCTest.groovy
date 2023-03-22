@@ -58,7 +58,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
             List<String> list = []
             list.add(1)
         ''',
-        'Cannot find matching method java.util.ArrayList#add(int)'
+        'Cannot call java.util.ArrayList#add(java.lang.String) with arguments [int]'
     }
 
     void testAddOnList2() {
@@ -115,14 +115,14 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
         '''
     }
 
-    void testListInferrenceWithNullElems() {
+    void testListInferenceWithNullElems() {
         assertScript '''
             List<String> strings = ['a', null]
             assert strings == ['a',null]
         '''
     }
 
-    void testListInferrenceWithAllNullElems() {
+    void testListInferenceWithAllNullElems() {
         assertScript '''
             List<String> strings = [null, null]
             assert strings == [null,null]
@@ -134,7 +134,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
             List<Integer> list = new LinkedList<>()
             list.add 'Hello'
         ''',
-        'Cannot find matching method java.util.LinkedList#add(java.lang.String). Please check if the declared type is correct and if the method exists.'
+        'Cannot call java.util.LinkedList#add(java.lang.Integer) with arguments [java.lang.String]'
     }
 
     void testAddOnListWithDiamondAndWrongTypeUsingLeftShift() {
@@ -241,7 +241,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
             Number number = Optional.of(42).orElse(Double.NaN)
             assert number.intValue() == 42
         ''',
-        'Cannot find matching method java.util.Optional#orElse(double).'
+        'Cannot call java.util.Optional#orElse(java.lang.Integer) with arguments [double]'
     }
 
     void testReturnTypeInferenceWithMethodGenerics5() {
@@ -257,7 +257,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
             Number number = Optional.ofNullable((Integer) null).orElse(42d)
             assert number.intValue() == 42
         ''',
-        'Cannot find matching method java.util.Optional#orElse(double).'
+        'Cannot call java.util.Optional#orElse(java.lang.Integer) with arguments [double]'
     }
 
     void testReturnTypeInferenceWithMethodGenerics7() {
@@ -302,7 +302,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
             assert result == [ 42 ]
         '''
 
-        ['t::cast', 'n -> t.cast(n)', 'n -> (N) n', '{ n -> (N) n }'].each { cast ->
+        for (cast in ['t::cast', 'n -> t.cast(n)', 'n -> (N) n', '{ n -> (N) n }']) {
             assertScript """
                 Set<Number> f() {
                     Collections.<Number>singleton(42)
@@ -376,6 +376,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
         '''
     }
 
+    // GROOVY-10978
     void testReturnTypeInferenceWithMethodGenerics1x() {
         assertScript '''
             interface Handle {
@@ -402,6 +403,61 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
             def c = new HandleContainer(handle: h)
             test({k->c} as Input, {k->c} as State)
         '''
+
+        File parentDir = File.createTempDir()
+        config.with {
+            targetDirectory = File.createTempDir()
+            jointCompilationOptions = [memStub: true]
+        }
+        try {
+            def a = new File(parentDir, 'Handle.java')
+            a.write '''
+                interface Handle {
+                    int getCount();
+                }
+            '''
+            def b = new File(parentDir, 'HandleContainer.java')
+            b.write '''
+                class HandleContainer<H extends Handle> {
+                    H handle;
+                }
+            '''
+            def c = new File(parentDir, 'Input.java')
+            c.write '''
+                interface Input {
+                    HandleContainer<? extends Handle> getResult(Object key);
+                }
+            '''
+            def d = new File(parentDir, 'State.java')
+            d.write '''
+                interface State {
+                    <X extends Handle> HandleContainer<X> getResult(Object key);
+                }
+            '''
+            def e = new File(parentDir, 'Tester.groovy')
+            e.write '''
+                void test(Input input, State state) {
+                    def container = state.getResult('k') ?: input.getResult('k')
+                    Handle handle = container.handle
+                    Integer count = handle.count
+                    assert count == 1
+                }
+
+                Handle h = {->1}
+                def c = new HandleContainer(handle: h)
+                test({k->c} as Input, {k->c} as State)
+            '''
+
+            def loader = new GroovyClassLoader(this.class.classLoader)
+            def cu = new JavaAwareCompilationUnit(config, loader)
+            cu.addSources(a, b, c, d, e)
+            cu.compile()
+
+            loader.loadClass('Tester').main()
+        } finally {
+            parentDir.deleteDir()
+            config.targetDirectory.deleteDir()
+        }
     }
 
     // GROOVY-10067
@@ -458,7 +514,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
 
     // GROOVY-8409
     void testReturnTypeInferenceWithMethodGenerics14() {
-        ['R', 'S', 'T', 'U'].each { t -> // BiFunction uses R, T and U
+        for (t in ['R', 'S', 'T', 'U']) { // BiFunction uses R, T and U
             assertScript """
                 def <$t> $t applyFunction(java.util.function.BiFunction<Date, URL, $t> action) {
                     $t result = action.apply(new Date(), new URL('https://www.example.com'))
@@ -686,8 +742,23 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
         '''
     }
 
-    // GROOVY-10622
+    // GROOVY-7992
     void testReturnTypeInferenceWithMethodGenerics26() {
+        assertScript '''
+            List<String> strings = ['foo','bar','baz']
+            Comparator<Object> cmp = { o1, o2 -> o1.toString() <=> o2.toString() }
+
+            @groovy.transform.ASTTest(phase=INSTRUCTION_SELECTION, value={
+                def type = node.getNodeMetaData(INFERRED_TYPE)
+                assert type.toString(false) == 'java.util.List<java.lang.String>'
+            })
+            def result = strings.sort(false, cmp) // List<T> sort(Iterable<T>,boolean,Comparator<? super T>)
+            assert result == ['bar', 'baz', 'foo']
+        '''
+    }
+
+    // GROOVY-10622
+    void testReturnTypeInferenceWithMethodGenerics27() {
         String types = '''
             @groovy.transform.TupleConstructor(defaults=false)
             class A<X> {
@@ -720,7 +791,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10637
-    void testReturnTypeInferenceWithMethodGenerics27() {
+    void testReturnTypeInferenceWithMethodGenerics28() {
         assertScript '''
             class Outer extends groovy.transform.stc.MyBean<Inner> {
                 static class Inner {
@@ -737,7 +808,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10646
-    void testReturnTypeInferenceWithMethodGenerics28() {
+    void testReturnTypeInferenceWithMethodGenerics29() {
         String types = '''
             class Model {
             }
@@ -778,7 +849,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10749
-    void testReturnTypeInferenceWithMethodGenerics29() {
+    void testReturnTypeInferenceWithMethodGenerics30() {
         String named = 'class Named { String name }'
 
         for (expr in ['Named.&getName', 'Named::getName', '{Named named -> named.getName()}', '(Named named) -> named.getName()']) {
@@ -809,7 +880,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
         '''
     }
 
-    void testDiamondInferrenceFromConstructor1() {
+    void testDiamondInferenceFromConstructor1() {
         assertScript '''
             class Foo<U> {
                 U method() { }
@@ -819,13 +890,13 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
         '''
     }
 
-    void testDiamondInferrenceFromConstructor2() {
+    void testDiamondInferenceFromConstructor2() {
         assertScript '''
             Set<Long> set = new HashSet<>()
         '''
     }
 
-    void testDiamondInferrenceFromConstructor3() {
+    void testDiamondInferenceFromConstructor3() {
         assertScript '''
             new HashSet<>(Arrays.asList(0L))
         '''
@@ -849,7 +920,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-7419
-    void testDiamondInferrenceFromConstructor4() {
+    void testDiamondInferenceFromConstructor4() {
         assertScript '''
             Map<Thread.State, Object> map = new EnumMap<>(Thread.State)
             assert map.size() == 0
@@ -858,8 +929,8 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-6232
-    void testDiamondInferrenceFromConstructor5() {
-        ['"a",new Object()', 'new Object(),"b"', '"a","b"'].each { args ->
+    void testDiamondInferenceFromConstructor5() {
+        for (args in ['"a",new Object()', 'new Object(),"b"', '"a","b"']) {
             assertScript """
                 class C<T> {
                     C(T x, T y) {
@@ -871,7 +942,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-9948
-    void testDiamondInferrenceFromConstructor6() {
+    void testDiamondInferenceFromConstructor6() {
         assertScript '''
             class C<T> {
                 T p
@@ -886,7 +957,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-9948
-    void testDiamondInferrenceFromConstructor7() {
+    void testDiamondInferenceFromConstructor7() {
         assertScript '''
             @groovy.transform.TupleConstructor(defaults=false)
             class C<T> {
@@ -899,7 +970,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-9984
-    void testDiamondInferrenceFromConstructor7a() {
+    void testDiamondInferenceFromConstructor7a() {
         assertScript '''
             @groovy.transform.TupleConstructor(defaults=false)
             class C<T> {
@@ -912,7 +983,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-9956
-    void testDiamondInferrenceFromConstructor8() {
+    void testDiamondInferenceFromConstructor8() {
         assertScript '''
             @groovy.transform.TupleConstructor(defaults=false)
             class C<T> {
@@ -927,7 +998,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-9996
-    void testDiamondInferrenceFromConstructor8a() {
+    void testDiamondInferenceFromConstructor8a() {
         assertScript '''
             @groovy.transform.TupleConstructor(defaults=false)
             class C<T> {
@@ -944,7 +1015,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10011
-    void testDiamondInferrenceFromConstructor8b() {
+    void testDiamondInferenceFromConstructor8b() {
         assertScript '''
             @groovy.transform.TupleConstructor(defaults=false)
             class C<T> {
@@ -962,7 +1033,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
         '''
     }
 
-    void testDiamondInferrenceFromConstructor9() {
+    void testDiamondInferenceFromConstructor9() {
         assertScript '''
             abstract class A<X> { }
             @groovy.transform.TupleConstructor(defaults=false)
@@ -995,7 +1066,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-9972
-    void testDiamondInferrenceFromConstructor9a() {
+    void testDiamondInferenceFromConstructor9a() {
         assertScript '''
             @groovy.transform.TupleConstructor(defaults=false)
             class C<T> {
@@ -1054,7 +1125,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
         '''
     }
 
-    void testDiamondInferrenceFromConstructor9b() {
+    void testDiamondInferenceFromConstructor9b() {
         assertScript '''
             @groovy.transform.TupleConstructor(defaults=false)
             class C<T> {
@@ -1085,7 +1156,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-9963
-    void testDiamondInferrenceFromConstructor10() {
+    void testDiamondInferenceFromConstructor10() {
         assertScript '''
             @groovy.transform.TupleConstructor(defaults=false)
             class C<T> {
@@ -1099,7 +1170,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10080
-    void testDiamondInferrenceFromConstructor11() {
+    void testDiamondInferenceFromConstructor11() {
         assertScript '''
             @groovy.transform.TupleConstructor(defaults=false)
             class C<T> {
@@ -1119,7 +1190,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10086
-    void testDiamondInferrenceFromConstructor12() {
+    void testDiamondInferenceFromConstructor12() {
         shouldFailWithMessages '''
             @groovy.transform.TupleConstructor(defaults=false)
             class C<T> {
@@ -1136,7 +1207,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-9970
-    void testDiamondInferrenceFromConstructor13() {
+    void testDiamondInferenceFromConstructor13() {
         assertScript '''
             @groovy.transform.TupleConstructor(defaults=false)
             class A<T extends B> {
@@ -1158,7 +1229,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-9983
-    void testDiamondInferrenceFromConstructor14() {
+    void testDiamondInferenceFromConstructor14() {
         String types = '''
             @groovy.transform.TupleConstructor(defaults=false)
             class A<T> {
@@ -1205,7 +1276,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10114
-    void testDiamondInferrenceFromConstructor14a() {
+    void testDiamondInferenceFromConstructor14a() {
         assertScript '''
             @groovy.transform.TupleConstructor(defaults=false)
             class A<T> {
@@ -1224,7 +1295,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-9995
-    void testDiamondInferrenceFromConstructor15() {
+    void testDiamondInferenceFromConstructor15() {
         [
             ['Closure<A<Long>>', 'java.util.concurrent.Callable<A<Long>>'],
             ['new A<>(42L)', 'return new A<>(42L)']
@@ -1244,7 +1315,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10283
-    void testDiamondInferrenceFromConstructor16() {
+    void testDiamondInferenceFromConstructor16() {
         assertScript '''
             class A<T1, T2> {
             }
@@ -1262,7 +1333,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10291
-    void testDiamondInferrenceFromConstructor17() {
+    void testDiamondInferenceFromConstructor17() {
         assertScript '''
             @groovy.transform.TupleConstructor(defaults=false)
             class A<X> {
@@ -1283,7 +1354,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10228
-    void testDiamondInferrenceFromConstructor18() {
+    void testDiamondInferenceFromConstructor18() {
         assertScript '''
             @groovy.transform.TupleConstructor(defaults=false)
             class C<T> {
@@ -1299,7 +1370,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10323
-    void testDiamondInferrenceFromConstructor19() {
+    void testDiamondInferenceFromConstructor19() {
         assertScript '''
             class C<T> {
             }
@@ -1310,7 +1381,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10324
-    void testDiamondInferrenceFromConstructor20() {
+    void testDiamondInferenceFromConstructor20() {
         assertScript '''
             class C<T> {
             }
@@ -1321,7 +1392,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10310
-    void testDiamondInferrenceFromConstructor21() {
+    void testDiamondInferenceFromConstructor21() {
         assertScript '''
             @groovy.transform.TupleConstructor
             class A<T> {
@@ -1338,7 +1409,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10344
-    void testDiamondInferrenceFromConstructor22() {
+    void testDiamondInferenceFromConstructor22() {
         assertScript '''
             class C<X,Y> {
             }
@@ -1351,7 +1422,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10230
-    void testDiamondInferrenceFromConstructor23() {
+    void testDiamondInferenceFromConstructor23() {
         assertScript '''
             class A {
                 def <T extends C<Number,Number>> T m(T t) {
@@ -1372,7 +1443,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10351
-    void testDiamondInferrenceFromConstructor24() {
+    void testDiamondInferenceFromConstructor24() {
         assertScript '''
             class C<T> {
                 C(T one, D<T,? extends T> two) {
@@ -1386,10 +1457,10 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10368
-    void testDiamondInferrenceFromConstructor25() {
-        ['T', 'T extends Number', 'T extends Object'].each {
+    void testDiamondInferenceFromConstructor25() {
+        for (t in ['T', 'T extends Number', 'T extends Object']) {
             assertScript """
-                class C<$it> {
+                class C<$t> {
                     C(p) {
                     }
                 }
@@ -1401,7 +1472,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10367
-    void testDiamondInferrenceFromConstructor26() {
+    void testDiamondInferenceFromConstructor26() {
         assertScript '''
             @groovy.transform.TupleConstructor(defaults=false)
             class C<X, Y extends X> { // works without Y
@@ -1415,7 +1486,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10343
-    void testDiamondInferrenceFromConstructor27() {
+    void testDiamondInferenceFromConstructor27() {
         assertScript '''
             class C<T1, T2 extends T1> {
                 T1 p
@@ -1432,7 +1503,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10316
-    void testDiamondInferrenceFromConstructor28() {
+    void testDiamondInferenceFromConstructor28() {
         assertScript '''
             class A<T> {
                 A(T t) {
@@ -1448,7 +1519,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10624
-    void testDiamondInferrenceFromConstructor29() {
+    void testDiamondInferenceFromConstructor29() {
         assertScript '''
             class A<T> {
             }
@@ -1460,7 +1531,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10266
-    void testDiamondInferrenceFromConstructor30() {
+    void testDiamondInferenceFromConstructor30() {
         assertScript '''
             @groovy.transform.TupleConstructor(defaults=false)
             class A<T> {
@@ -1480,7 +1551,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10662
-    void testDiamondInferrenceFromConstructor31() {
+    void testDiamondInferenceFromConstructor31() {
         assertScript '''
             class A<X, T> {
                 A(T t, X x) {}
@@ -1499,7 +1570,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10633
-    void testDiamondInferrenceFromConstructor32() {
+    void testDiamondInferenceFromConstructor32() {
         assertScript '''
             class A<T, Y> {
                 public B<Y> f
@@ -1520,7 +1591,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10699
-    void testDiamondInferrenceFromConstructor33() {
+    void testDiamondInferenceFromConstructor33() {
         assertScript '''
             class A<T> {
                 A(B<T> b_of_t) {
@@ -1549,7 +1620,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
                 def type = node.getNodeMetaData(INFERRED_TYPE)
                 assert type.toString(false) == 'C<java.lang.String>'
             })
-            def y = new C<>((String s) -> { print(s); }) // error: Expected type Object for lambda parameter: s
+            def y = new C<>((String s) -> { print(s) }) // error: Expected type Object for lambda parameter: s
         '''
 
         assertScript '''import java.util.function.Supplier
@@ -1568,7 +1639,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     // GROOVY-10698
-    void testDiamondInferrenceFromConstructor34() {
+    void testDiamondInferenceFromConstructor34() {
         assertScript '''
             class A<T> {
                 A(T t, B<T> b_of_t) {
@@ -1585,8 +1656,26 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
         '''
     }
 
+    // GROOVY-10847
+    void testDiamondInferenceFromConstructor35() {
+        assertScript '''
+            class A<T, U> {
+            }
+            class B {
+              def <X extends A<Character, Boolean>, Y extends X> Object m(X x, Y y) {
+              }
+            }
+
+            @ASTTest(phase=INSTRUCTION_SELECTION, value={
+                def type = node.rightExpression.arguments[1].getNodeMetaData(INFERRED_TYPE)
+                assert type.toString(false) == 'A<java.lang.Character, java.lang.Boolean>'
+            })
+            def c = new B().m(null, new A<>())
+        '''
+    }
+
     // GROOVY-10674
-    void testDiamondInferrenceFromConstructor35() {
+    void testDiamondInferenceFromConstructor36() {
         assertScript '''
             class Foo<BB extends Bar<Byte>, X extends BB> {
                 X x
@@ -1617,6 +1706,19 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
                 Foo<Bar<Byte,Byte>, ? super Bar<Byte,Byte>> foo = new Foo<>(new Bar<>())
             }
             new Baz()
+        '''
+    }
+
+    // GROOVY-10890
+    void testDiamondInferenceFromConstructor37() {
+        assertScript '''
+            enum A { X }
+            enum B { Y }
+            void m(Map<A,B> map) {}
+            void test(Map<A,B> map) {
+                m(new EnumMap<>(map))
+            }
+            test([(A.X): B.Y])
         '''
     }
 
@@ -1829,6 +1931,35 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
             parentDir.deleteDir()
             config.targetDirectory.deleteDir()
         }
+    }
+
+    // GROOVY-10911
+    void testMethodCallShouldWorkForProperUpperBound() {
+        assertScript '''
+            abstract class A {
+                String name
+            }
+            class B extends A {
+                int count
+            }
+            class C extends A {
+                double avg
+            }
+            void proc(List<? extends Object> list) {
+            }
+            void test(A a) {
+                def list
+                if (a instanceof B) {
+                    list = [a.name, a.count, ""]
+                } else {
+                    def c = a as C
+                    list = [c.name, "  ", c.avg]
+                }
+                proc(list) // STC OOB exception!
+            }
+            test(new B())
+            test(new C())
+        '''
     }
 
     void testGroovy5154() {
@@ -2061,7 +2192,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
             def map = new HashMap<String, Integer>()
             map.put('hello', new Object())
         ''',
-        'Cannot find matching method java.util.HashMap#put(java.lang.String, java.lang.Object). Please check if the declared type is correct and if the method exists.'
+        'Cannot call java.util.HashMap#put(java.lang.String, java.lang.Integer) with arguments [java.lang.String, java.lang.Object]'
     }
 
     void testPutAtWithWrongValueType() {
@@ -2093,7 +2224,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
                 }
             }
         ''',
-        'Cannot find matching method java.util.Map#put(java.lang.String, java.util.LinkedHashMap<java.lang.String, java.util.List<ConfigAttribute>>)',
+        'Cannot call java.util.Map#put(java.lang.String, java.util.Map<java.lang.String, java.util.List<java.lang.String>>) with arguments [java.lang.String, java.util.LinkedHashMap<java.lang.String, java.util.List<ConfigAttribute>>]',
         'Cannot assign java.util.LinkedHashMap<java.lang.String, java.util.List<ConfigAttribute>> to: java.util.Map<java.lang.String, java.util.List<java.lang.String>>'
 
         assertScript '''
@@ -2232,7 +2363,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
 
     // GROOVY-8961, GROOVY-9915
     void testShouldUseMethodGenericType3() {
-        ['', 'static'].each { mods ->
+        for (mods in ['', 'static']) {
             assertScript """
                 $mods void setX(List<String> strings) {
                 }
@@ -2271,7 +2402,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
 
     // GROOVY-9734, GROOVY-9915
     void testShouldUseMethodGenericType4() {
-        ['', 'static'].each { mods ->
+        for (mods in ['', 'static']) {
             assertScript """
                 $mods void m(List<String> strings) {
                 }
@@ -2359,7 +2490,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
             assert opt.get() == 42
         '''
         // same as above but with separate type parameter name for each location
-        ['D.&wrap', 'Collections.&singleton', '{x -> [x].toSet()}', '{Collections.singleton(it)}'].each { toSet ->
+        for (toSet in ['D.&wrap', 'Collections.&singleton', '{x -> [x].toSet()}', '{Collections.singleton(it)}']) {
             assertScript """
                 abstract class A<I,O> {
                     abstract O apply(I input)
@@ -2870,7 +3001,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
             Map<Date, Date> map = new HashMap<>()
             map.put(123, new Date())
         ''',
-        'Cannot find matching method java.util.HashMap#put(int, java.util.Date). Please check if the declared type is correct and if the method exists.'
+        'Cannot call java.util.HashMap#put(java.util.Date, java.util.Date) with arguments [int, java.util.Date]'
     }
     void testInferDiamondForAssignmentWithDatesAndIllegalKeyUsingSquareBracket() {
         shouldFailWithMessages '''
@@ -2910,7 +3041,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
             Map<Date, Date> map = new HashMap<>()
             map.put(new Date(), 'foo')
         ''',
-        'Cannot find matching method java.util.HashMap#put(java.util.Date, java.lang.String). Please check if the declared type is correct and if the method exists.'
+        'Cannot call java.util.HashMap#put(java.util.Date, java.util.Date) with arguments [java.util.Date, java.lang.String]'
     }
     void testInferDiamondForAssignmentWithDatesAndIllegalValueUsingSquareBracket() {
         shouldFailWithMessages '''
@@ -3125,7 +3256,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
 
     // GROOVY-10482
     void testCompatibleArgumentsForPlaceholders6() {
-        ['', 'def', 'public', 'static', '@Deprecated'].each {
+        for (it in ['', 'def', 'public', 'static', '@Deprecated']) {
             assertScript """
                 class Foo<X> {
                     Foo(X x) {
@@ -3143,7 +3274,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
 
     // GROOVY-10499
     void testCompatibleArgumentsForPlaceholders7() {
-        ['?', 'Y', '? extends Y'].each {
+        for (it in ['?', 'Y', '? extends Y']) {
             assertScript """
                 class Foo<X> {
                     Foo(X x) {
@@ -3214,17 +3345,35 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
 
     // GROOVY-10153
     void testCompatibleArgumentsForPlaceholders11() {
-        ['A', 'B', 'C'].each { T ->
+        for (t in ['A', 'B', 'C']) {
             assertScript """
                 class A {}
                 class B extends A {}
                 class C extends B {}
                 class Foo<T extends A> {}
 
-                Foo<? super C> foo = new Foo<$T>()
+                Foo<? super C> foo = new Foo<$t>()
                 //  ^ lower bound is C (explicit); upper bound is A (implicit)
             """
         }
+    }
+
+    // GROOVY-10270
+    void testCompatibleArgumentsForPlaceholders12() {
+        assertScript '''import java.util.function.*
+            void a(Function<Number,Byte> fn) { }
+            class B {
+                B(Function<Number,Byte> fn) { }
+            }
+            class C<T> {
+                C(T t) { }
+            }
+
+            a({ Number x -> x.byteValue() })
+            new B({ Number x -> x.byteValue() })
+            new C<Function<Number,Byte>>({ Number x -> x.byteValue() } as Function<Number,Byte>)
+            new C<Function<Number,Byte>>({ Number x -> x.byteValue() }                         )
+        '''
     }
 
     void testIncompatibleArgumentsForPlaceholders1() {
@@ -3235,7 +3384,8 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
         '#test(int, java.lang.String). Please check if the declared type is correct and if the method exists.'
     }
 
-    @NotYetImplemented // GROOVY-7720
+    // GROOVY-7720
+    @NotYetImplemented
     void testIncompatibleArgumentsForPlaceholders2() {
         shouldFailWithMessages '''
             class Consumer<T> {
@@ -3301,8 +3451,8 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
             test(new Holder<Object>())
         ''',
         'Cannot call TypedProperty#eq(java.lang.String) with arguments [groovy.lang.GString]',
-        'Cannot find matching method TypedProperty#eq(int)', // chooseBestMethod removes "eq"
-        'Cannot find matching method TypedProperty#eq(java.lang.String)'
+        'Cannot call TypedProperty#eq(java.lang.String) with arguments [int]',
+        'Cannot call TypedProperty#eq(java.lang.Number) with arguments [java.lang.String]'
     }
 
     // GROOVY-5748
@@ -3770,7 +3920,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
 
     // GROOVY-5893
     void testPlusInClosure() {
-        ['def', 'var', 'Object', 'Number', 'Integer', 'Comparable'].each { type ->
+        for (type in ['def', 'var', 'Object', 'Number', 'Integer', 'Comparable']) {
             assertScript """
                 List<Integer> list = [1, 2, 3]
 
@@ -4033,13 +4183,13 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     // GROOVY-6233
     void testConstructorArgumentsAgainstGenerics() {
         shouldFailWithMessages '''
-            class Foo<T>{  Foo(T a, T b){} }
-            def bar() {
-                Foo<Map> f = new Foo<Map>("a",1)
+            class C<T> {
+                C(T a, T b) {
+                }
             }
-            bar()
+            def c_of_map = new C<Map>("a", 1)
         ''',
-        'Cannot find matching method Foo#<init>(java.lang.String, int)'
+        'Cannot call C#<init>(java.util.Map, java.util.Map) with arguments [java.lang.String, int]'
     }
 
     // GROOVY-5742
@@ -4164,6 +4314,25 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
             }
             test(null)
         '''
+    }
+
+    // GROOVY-10846
+    void testClassLevelGenericsForPropertyRead() {
+        for (vis in ['','public','protected','@groovy.transform.PackageScope']) {
+            assertScript """
+                class A {
+                    $vis String b
+                }
+                class C<X extends A, Y extends List<X>> {
+                    void test(X x) {
+                        x.b = 'blah'
+                    }
+                }
+                A a = []
+                new C<A, List<A>>().test(a)
+                assert a.b == 'blah'
+            """
+        }
     }
 
     // GROOVY-6919
@@ -4569,7 +4738,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
     }
 
     void testContravariantMethodResolutionWithImplicitCoercion2() {
-        ['public', 'static'].each { modifier ->
+        for (modifier in ['public', 'static']) {
             assertScript """
                 $modifier <I, O> void transform(java.util.function.Function<? super I, ? extends O> function) {
                     function.apply('')
@@ -4816,7 +4985,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
         '''
 
         // GROOVY-9821
-        ['.', '?.', '*.'].each { op ->
+        for (op in ['.', '?.', '*.']) {
             File parentDir = File.createTempDir()
             config.with {
                 targetDirectory = File.createTempDir()
@@ -4991,7 +5160,7 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
 
     // GROOVY-10556
     void testSelfReferentialTypeParameter3() {
-        ['(B) this', 'this as B'].each { self ->
+        for (self in ['(B) this', 'this as B']) {
             assertScript """
                 abstract class A<B extends A<B,X>,X> {
                     B m() {
@@ -5030,6 +5199,25 @@ class GenericsSTCTest extends StaticTypeCheckingTestCase {
                     .toEntity(new ParameterizedTypeReference<List<BigDecimal>>() {})
                     .block(java.time.Duration.ofSeconds(2))
                 return response.getBody() ?: []
+            }
+        '''
+    }
+
+    // GROOVY-10887
+    void testSelfReferentialTypeParameter6() {
+        assertScript '''
+            @Grab('org.springframework.integration:spring-integration-groovy:5.5.15')
+            import org.springframework.integration.channel.AbstractMessageChannel
+            import org.springframework.integration.dsl.MessageChannelSpec
+            import org.springframework.integration.dsl.MessageChannels
+            @Grab('org.springframework:spring-messaging:5.3.24')
+            import org.springframework.messaging.MessageChannel
+
+            def <AMC extends AbstractMessageChannel, MCS extends MessageChannelSpec<MCS,AMC>> MCS mark(MCS self) {
+                self.interceptor(null) // returns self
+            }
+            MessageChannel make() {
+                mark(MessageChannels.publishSubscribe(true).minSubscribers(2)).get()
             }
         '''
     }

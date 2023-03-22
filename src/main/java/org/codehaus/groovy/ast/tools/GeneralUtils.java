@@ -371,12 +371,12 @@ public class GeneralUtils {
         return new MapEntryExpression(key, value);
     }
 
-    public static BinaryExpression eqX(final Expression lhv, final Expression rhv) {
-        return binX(lhv, EQ, rhv);
+    public static BinaryExpression eqX(final Expression left, final Expression right) {
+        return binX(left, EQ, right);
     }
 
-    public static BooleanExpression equalsNullX(final Expression argExpr) {
-        return boolX(eqX(argExpr, nullX()));
+    public static BooleanExpression equalsNullX(final Expression expr) {
+        return boolX(eqX(nullX(), expr));
     }
 
     public static FieldExpression fieldX(final FieldNode fieldNode) {
@@ -540,23 +540,24 @@ public class GeneralUtils {
         }
         if (includeFields) {
             for (FieldNode fNode : cNode.getFields()) {
-                if ((fNode.isStatic() && !includeStatic) || fNode.isSynthetic() || cNode.getProperty(fNode.getName()) != null || names.contains(fNode.getName())) {
+                if ((fNode.isStatic() && !includeStatic) || fNode.isSynthetic()) {
                     continue;
                 }
-
-                // internal field
-                if (fNode.getName().contains("$") && !allNames) {
-                    continue;
-                }
-
                 if (fNode.isPrivate() && !cNode.equals(origType)) {
+                    continue;
+                }
+                String fName = fNode.getName();
+                if (names.contains(fName) || cNode.getProperty(fName) != null) {
+                    continue;
+                }
+                if (!allNames && (fName.contains("$") || fName.contains("__"))) { // "special"
                     continue;
                 }
                 if (fNode.isFinal() && fNode.getInitialExpression() != null && skipReadonly) {
                     continue;
                 }
-                result.add(new PropertyNode(fNode, fNode.getModifiers(), null, null));
-                names.add(fNode.getName());
+                names.add(fName);
+                result.add(new PropertyNode(fNode, fNode.getModifiers() & 0x1F, null, null));
             }
         }
         if (!(isObjectType(cNode)) && traverseSuperClasses && reverse) {
@@ -660,8 +661,15 @@ public class GeneralUtils {
         return binX(target, INDEX, value);
     }
 
-    public static BooleanExpression isInstanceOfX(final Expression objectExpression, final ClassNode cNode) {
-        return boolX(binX(objectExpression, INSTANCEOF, classX(cNode)));
+    public static BooleanExpression isInstanceOfX(final Expression expr, final ClassNode type) {
+        return boolX(binX(expr, INSTANCEOF, classX(type)));
+    }
+
+    /**
+     * @since 4.0.8
+     */
+    public static BooleanExpression isNullOrInstanceOfX(final Expression expr, final ClassNode type) {
+        return boolX(orX(binX(nullX(), Token.newSymbol(Types.COMPARE_IDENTICAL, -1, -1), expr), binX(expr, INSTANCEOF, classX(type))));
     }
 
     /**
@@ -739,8 +747,8 @@ public class GeneralUtils {
         return binX(lhv, NOT_IDENTICAL, rhv);
     }
 
-    public static BooleanExpression notNullX(final Expression argExpr) {
-        return boolX(binX(argExpr, NE, nullX()));
+    public static BooleanExpression notNullX(final Expression expr) {
+        return boolX(binX(nullX(), NE, expr));
     }
 
     public static NotExpression notX(final Expression expr) {
@@ -802,7 +810,7 @@ public class GeneralUtils {
     }
 
     public static Statement safeExpression(final Expression fieldExpr, final Expression expression) {
-        return new IfStatement(equalsNullX(fieldExpr), stmt(fieldExpr), stmt(expression));
+        return new IfStatement(isNullX(fieldExpr), stmt(fieldExpr), stmt(expression));
     }
 
     public static BooleanExpression sameX(final Expression self, final Expression other) {
@@ -945,7 +953,7 @@ public class GeneralUtils {
         }
         fNode.setInitialValueExpression(null);
         Expression value = findArg(name);
-        return ifElseS(equalsNullX(value), assignInit, assignS(fieldExpr, castX(fType, value)));
+        return ifElseS(isNullX(value), assignInit, assignS(fieldExpr, castX(fType, value)));
     }
 
     /**

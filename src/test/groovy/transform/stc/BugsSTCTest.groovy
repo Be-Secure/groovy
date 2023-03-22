@@ -1116,12 +1116,19 @@ Printer
         '''
     }
 
-    // GROOVY-10109
+    // GROOVY-8339, GROOVY-10109, GROOVY-10594
     void testInvokePublicMethodFromInaccessibleBase() {
+        assertScript '''
+            new StringBuilder().setLength(0)
+        '''
         assertScript '''
             new StringBuilder().with {
                 assert length() == 0 // access error
             }
+        '''
+        assertScript '''
+            String sub = new StringBuilder("Hello World").substring(0,5)
+            assert sub == 'Hello'
         '''
     }
 
@@ -1187,12 +1194,21 @@ Printer
         '''
     }
 
+    // GROOVY-10869
+    void testBigDecimalCompareNullPointerException1() {
+        assertScript '''
+            class C<T> {
+                C(T x) { }
+                <T extends Short> T m(T x) { x }
+            }
+            C<Integer> obj = new C<Integer>(-76)
+            boolean cond = 5.0 > obj.m(new C<Integer>(95).m(null))
+        '''
+    }
+
     // GROOVY-9999
     void testMathSqrt() {
         assertScript '''
-            import groovy.transform.TypeChecked
-
-            @TypeChecked
             def test() {
                Math.sqrt(Math.PI*2)
             }

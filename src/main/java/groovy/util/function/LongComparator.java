@@ -16,29 +16,19 @@
  *  specific language governing permissions and limitations
  *  under the License.
  */
-package groovy.bugs
+package groovy.util.function;
 
-import org.junit.Test
-
-import static groovy.test.GroovyAssert.shouldFail
-
-final class Groovy7987 {
-
-    @Test
-    void testNonStaticMethodViaStaticReceiver() {
-        def err = shouldFail '''
-            class Foo {
-                def bar() {
-                }
-            }
-
-            @groovy.transform.TypeChecked
-            void test() {
-                Foo.bar()
-            }
-
-            test()
-        '''
-        assert err =~ 'Non-static method Foo#bar cannot be called from static context'
-    }
+/**
+ * A comparator of two long values.
+ */
+@FunctionalInterface
+public interface LongComparator {
+    /**
+     * Compares its two arguments for order.
+     *
+     * @param v1 The long value to compare.
+     * @param v2 The long value to compare.
+     * @return If v1 is less than v2, returns negative. If v1 equals to v2, returns zero. If v1 is greater than v2, returns positive.
+     */
+    int compare(long v1, long v2);
 }

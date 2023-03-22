@@ -506,8 +506,7 @@ public class AsmClassGenerator extends ClassGenerator {
 
         visitAnnotations(node, mv);
         visitTypeParameters(node, mv);
-        // ideally following statement would be in visitMethod but mv not visible there
-        if (!(node instanceof ConstructorNode)) {
+        if (!node.isConstructor() || node.getReturnType().isAnnotated()) {
             visitType(node.getReturnType(), mv, newTypeReference(METHOD_RETURN), "", true);
         }
 
@@ -575,10 +574,11 @@ public class AsmClassGenerator extends ClassGenerator {
         controller.getCompileStack().init(node.getVariableScope(), parameters);
         controller.getCallSiteWriter().makeSiteEntry();
 
+        ClassNode cn = controller.getClassNode();
         MethodVisitor mv = controller.getMethodVisitor();
         if (isConstructor && (code == null || !((ConstructorNode) node).firstStatementIsSpecialConstructorCall())) {
             boolean hasCallToSuper = false;
-            if (code != null && controller.getClassNode().getOuterClass() != null) {
+            if (code != null && cn.getOuterClass() != null) {
                 // GROOVY-4471: if the class is an inner class node, there are chances that
                 // the call to super is already added so we must ensure not to add it twice
                 if (code instanceof BlockStatement) {
@@ -590,6 +590,15 @@ public class AsmClassGenerator extends ClassGenerator {
             if (!hasCallToSuper) {
                 if (code != null) { // GROOVY-9373
                     controller.visitLineNumber(code.getLineNumber());
+                }
+                if (cn.getSuperClass().getDeclaredConstructor(Parameter.EMPTY_ARRAY) == null) { ASTNode where = node; // GROOVY-9857
+                    String error = "Implicit super constructor " + cn.getSuperClass().getNameWithoutPackage() + "() is undefined";
+                    if (node.getLineNumber() > 0) error += ". Must explicitly invoke another constructor.";
+                    else {
+                        error += " for generated constructor. Must define an explicit constructor.";
+                        where = cn;
+                    }
+                    addError(error, where);
                 }
                 // add call to "super()"
                 mv.visitVarInsn(ALOAD, 0);
@@ -1504,7 +1513,7 @@ public class AsmClassGenerator extends ClassGenerator {
             mv.visitFieldInsn(PUTSTATIC,controller.getInternalClassName(),staticFieldName,"Ljava/lang/Class;");
             mv.visitLabel(l0);
             mv.visitInsn(ARETURN);
-            mv.visitMaxs(0,0);
+            mv.visitMaxs(0, 0);
             mv.visitEnd();
         }
 
@@ -1526,7 +1535,7 @@ public class AsmClassGenerator extends ClassGenerator {
         mv.visitMethodInsn(INVOKESPECIAL, "java/lang/NoClassDefFoundError", "<init>", "(Ljava/lang/String;)V", false);
         mv.visitInsn(ATHROW);
         mv.visitTryCatchBlock(l0, l2, l2, "java/lang/ClassNotFoundException"); // br using l2 as the 2nd param seems create the right table entry
-        mv.visitMaxs(3, 2);
+        mv.visitMaxs(0, 0);
     }
 
     @Override
@@ -1946,7 +1955,7 @@ public class AsmClassGenerator extends ClassGenerator {
                     }
                     operandStack.remove(methodBlockSize);
                     mv.visitInsn(RETURN);
-                    mv.visitMaxs(0,0);
+                    mv.visitMaxs(0, 0);
                     mv.visitEnd();
                 }
                 mv = oldMv;
@@ -2289,10 +2298,12 @@ public class AsmClassGenerator extends ClassGenerator {
     }
 
     public void despreadList(final List<Expression> expressions, final boolean wrap) {
-        List<Expression> spreadIndexes = new ArrayList<>();
-        List<Expression> spreadExpressions = new ArrayList<>();
-        List<Expression> normalArguments = new ArrayList<>();
-        for (int i = 0, n = expressions.size(); i < n; i += 1) {
+        final int expressionCnt = expressions.size();
+        List<Expression> spreadIndexes = new ArrayList<>(expressionCnt);
+        List<Expression> spreadExpressions = new ArrayList<>(expressionCnt);
+        List<Expression> normalArguments = new ArrayList<>(expressionCnt);
+
+        for (int i = 0; i < expressionCnt; i += 1) {
             Expression expr = expressions.get(i);
             if (!(expr instanceof SpreadExpression)) {
                 normalArguments.add(expr);
@@ -2363,14 +2374,14 @@ public class AsmClassGenerator extends ClassGenerator {
         controller.getOperandStack().remove(1);
     }
 
-    public void onLineNumber(final ASTNode statement, final String message) {
-        if (statement == null || statement instanceof BlockStatement) return;
-
-        currentASTNode = statement;
-        int line = statement.getLineNumber();
-        if (!ASM_DEBUG && line == controller.getLineNumber()) return;
-
-        controller.visitLineNumber(line);
+    public void onLineNumber(final ASTNode node, final String message) {
+        if (node != null && !(node instanceof BlockStatement)) {
+            currentASTNode = node;
+            int line = node.getLineNumber();
+            if (line != controller.getLineNumber() || ASM_DEBUG) {
+                controller.visitLineNumber(line);
+            }
+        }
     }
 
     public void throwException(final String message) {

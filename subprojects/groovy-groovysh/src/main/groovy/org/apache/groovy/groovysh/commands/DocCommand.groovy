@@ -33,6 +33,7 @@ class DocCommand extends CommandSupport {
 
     private static final String ENV_BROWSER = 'BROWSER'
     private static final String ENV_BROWSER_GROOVYSH = 'GROOVYSH_BROWSER'
+    private static final List<String> PRIMITIVES = ['boolean', 'byte', 'short', 'char', 'int', 'long', 'float', 'double']
 
     private static final int TIMEOUT_CONN = 5 * 1000 // ms
     private static final int TIMEOUT_READ = 5 * 1000 // ms
@@ -75,12 +76,17 @@ class DocCommand extends CommandSupport {
             doc(args[0])
             return
         }
+        if (args?.size() == 2) {
+            doc(args[1], args[0])
+            return
+        }
         fail(messages.format('error.unexpected_args', args ? args.join(' ') : 'no arguments'))
     }
 
-    void doc(String className) {
+    void doc(String className, String module = null) {
         def normalizedClassName = normalizeClassName(className)
-        def urls = urlsFor(normalizedClassName)
+        def normalizedModule = normalizeClassName(module ?: '')
+        def urls = urlsFor(normalizedClassName, normalizedModule)
         if (urls.empty) {
             fail("Documentation for \"${normalizedClassName}\" could not be found.")
         }
@@ -93,7 +99,7 @@ class DocCommand extends CommandSupport {
     }
 
     protected String normalizeClassName(String className) {
-        className.replace('"', '').replace("'", '')
+        className.replace('"', '').replace("'", '').replace('[', '%5B').replace(']', '%5D')
     }
 
     protected void browse(List urls) {
@@ -134,57 +140,88 @@ class DocCommand extends CommandSupport {
         }
     }
 
-    protected List urlsFor(String className) {
+    protected List urlsFor(String className, String module = '') {
         String groovyVersion = GroovySystem.version
-        def path = className.replace('.', '/') + '.html'
+        String path = className.replace('.', '/') + '.html'
 
+        def url
         def urls = []
-        if (className.matches(/^(groovy|org\.codehaus\.groovy|)\..+/)) {
-            def url = new URL("http://docs.groovy-lang.org/$groovyVersion/html/gapi/$path")
-            if (sendHEADRequest(url)) {
+        if (!module && className.matches(/^(groovy|org\.codehaus\.groovy|org\.apache\.groovy|)\..+/)) {
+            if (sendHEADRequest(url = new URL("https://docs.groovy-lang.org/$groovyVersion/html/gapi/$path"), path)) {
                 urls << url
             }
-        } else {
-            // Don't specify package names to not depend on a specific version of Java SE.
-            // Java SE includes non-java(x) packages such as org.w3m.*, org.omg.*. org.xml.* for now
-            // and new packages might be added in the future.
-            def url = new URL("http://docs.oracle.com/javase/${simpleVersion()}/docs/api/$path")
-            if (sendHEADRequest(url)) {
+        }
+        // Don't specify package names to not depend on a specific version of Java SE.
+        // Java SE includes non-java(x) packages such as org.w3m.*, org.omg.*. org.xml.* for now
+        // and new packages might be added in the future.
+        if (sendHEADRequest(url = new URL("https://docs.oracle.com/${versionPrefix(module)}/$path"), path) ||
+            sendHEADRequest(url = new URL("https://download.java.net/java/early_access/${versionPrefix(module, true)}/$path"), path)) {
+            urls << url
+        } else if (!module) {
+            // if no module specified, fall back to JDK8 if java.base url wasn't found
+            if (sendHEADRequest(url = new URL("https://docs.oracle.com/javase/8/docs/api/$path"), path)) {
                 urls << url
-                url = new URL("http://docs.groovy-lang.org/$groovyVersion/html/groovy-jdk/$path")
-                if (sendHEADRequest(url)) {
-                    urls << url
-                }
             }
+        }
+        // make accessing enhancements for e.g. int[] or double[][] easier
+        if (PRIMITIVES.any{path.startsWith(it) }) {
+            path = "primitives-and-primitive-arrays/$path"
+        }
+
+        if (sendHEADRequest(url = new URL("https://docs.groovy-lang.org/$groovyVersion/html/groovy-jdk/$path"), path)) {
+            urls << url
         }
 
         urls
     }
 
-    private static simpleVersion() {
+    private static versionPrefix(String module, boolean ea = false) {
         String javaVersion = System.getProperty('java.version')
         if (javaVersion.startsWith('1.')) {
-            javaVersion.split(/\./)[1]
+            'javase/' + javaVersion.split(/\./)[1] + '/docs/api'
         } else {
             // java 9 and above
-            javaVersion.replaceAll(/-.*/, '').split(/\./)[0]
+            def mod = module ?: 'java.base'
+            def ver = javaVersion.replaceAll(/-.*/, '').split(/\./)[0]
+            "${(ea ? 'jdk' : 'en/java/javase/')}$ver/docs/api/$mod"
         }
     }
 
-    protected boolean sendHEADRequest(URL url) {
+    protected boolean sendHEADRequest(URL url, String path = null) {
+        IOException ioe
+        // try at most 3 times
+        for (int i = 0; i < 3; i++) {
+            try {
+                return doSendHEADRequest(url, path)
+            } catch (SocketTimeoutException e) {
+                ioe = e
+            } catch (IOException e) {
+                ioe = e
+                break
+            }
+        }
+
+        if (ioe) fail "Sending a HEAD request to $url failed (${ioe}). Please check your network settings."
+
+        return false
+    }
+
+    private boolean doSendHEADRequest(URL url, String path = null) {
+        HttpURLConnection conn = null
         try {
-            HttpURLConnection conn = url.openConnection() as HttpURLConnection
+            conn = url.openConnection() as HttpURLConnection
             conn.requestMethod = 'HEAD'
             conn.connectTimeout = TIMEOUT_CONN
             conn.readTimeout = TIMEOUT_READ
             conn.instanceFollowRedirects = true
-
-            return conn.responseCode == 200
-
-        } catch (IOException e) {
-            fail "Sending a HEAD request to $url failed (${e}). Please check your network settings."
+            def code = conn.responseCode
+            // if not found, redirects to search page, which we don't count as successful
+            // if no path given (legacy calls from third parties), treat all redirects as suspicious
+            boolean successfulRedirect = path ? conn.URL.toString().endsWith(path) : url.toString() == conn.URL.toString()
+            return code == 200 && successfulRedirect
+        } finally {
+            conn?.disconnect()
         }
     }
-
 }
 

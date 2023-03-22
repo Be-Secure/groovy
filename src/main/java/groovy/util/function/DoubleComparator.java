@@ -16,34 +16,19 @@
  *  specific language governing permissions and limitations
  *  under the License.
  */
+package groovy.util.function;
 
-
-
-
-package groovy.bugs
-
-import groovy.test.GroovyTestCase
-
-class Groovy8059Bug extends GroovyTestCase {
-    void test1() {
-        assertScript '''
-        @groovy.transform.CompileStatic
-        class Base<K extends Serializable, V> {
-            void delete(K key) {}
-            void delete(V value) {}
-        }
-
-        @groovy.transform.CompileStatic
-        class Foo extends Base<String, Integer> {}
-
-        @groovy.transform.CompileStatic
-        public class Class1 {
-            Class1() {
-                Foo foo = new Foo()
-                foo.delete(Integer.valueOf(1))
-            }
-        }
-        new Class1()
-        '''
-    }
+/**
+ * A comparator of two double values.
+ */
+@FunctionalInterface
+public interface DoubleComparator {
+    /**
+     * Compares its two arguments for order.
+     *
+     * @param v1 The double value to compare.
+     * @param v2 The double value to compare.
+     * @return If v1 is less than v2, returns negative. If v1 equals to v2, returns zero. If v1 is greater than v2, returns positive.
+     */
+    int compare(double v1, double v2);
 }

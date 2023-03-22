@@ -59,6 +59,7 @@ import java.net.URI;
 import java.nio.charset.Charset;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.attribute.FileAttribute;
@@ -99,6 +100,70 @@ public class NioExtensions extends DefaultGroovyMethodsSupport {
      */
     public static long size(Path self) throws IOException {
         return Files.size(self);
+    }
+
+    /**
+     * Provide the name of the file or directory.
+     * @param self a path object
+     * @return the name of the file or directory denoted by this path as a string, or an empty string if this path has zero path elements.
+     * @since 5.0.0
+     */
+    public static String getName(Path self) {
+        final Path fileName = self.getFileName();
+        return fileName == null ? "" : fileName.toString();
+    }
+
+    /**
+     * Provide the extension of this path.
+     *
+     * @param self a path object
+     * @return the extension of this path (not including the dot), or an empty string if it doesn't have one.
+     * @since 5.0.0
+     */
+    public static String getExtension(Path self) {
+        final String name = getName(self);
+        final int index = name.lastIndexOf('.');
+        if (index == -1) return "";
+        return name.substring(index + 1);
+    }
+
+    /**
+     * Provide the path's name without an extension.
+     *
+     * @param self a file object
+     * @return the name of this file or directory without an extension, or an empty string if this path has zero path elements.
+     * @since 5.0.0
+     */
+    public static String getBaseName(Path self) {
+        final String name = getName(self);
+        final int index = name.lastIndexOf('.');
+        if (index == -1) return name;
+        return name.substring(0, index);
+    }
+
+    /**
+     * Coerce the path to a {@code boolean} value.
+     *
+     * @param path a {@code Path} object
+     * @return {@code true} if the file at the path exists, {@code false} otherwise
+     * @see Files#exists(Path, LinkOption...)
+     * @since 5.0.0
+     */
+    public static boolean asBoolean(final Path path) {
+        return Files.exists(path);
+    }
+
+    /**
+     * Tests whether the file at the path exists.
+     *
+     * @param path a {@code Path} object
+     * @param options options indicating how symbolic links are handled .
+     * @return {@code true} if the file exists; {@code false} if the file does not exist or its existence cannot be determined
+     * @see Files#exists(Path, LinkOption...)
+     * @since 5.0.0
+     */
+    public static boolean exists(final Path path, LinkOption... options) {
+        return Files.exists(path, options);
     }
 
     /**
@@ -701,7 +766,7 @@ public class NioExtensions extends DefaultGroovyMethodsSupport {
         Writer writer = null;
         try {
             Charset resolvedCharset = Charset.forName(charset);
-            boolean shouldWriteBom = writeBom && !self.toFile().exists();
+            boolean shouldWriteBom = writeBom && !Files.exists(self);
             OutputStream out = Files.newOutputStream(self, CREATE, APPEND);
             if (shouldWriteBom) {
                 writeUTF16BomIfRequired(out, resolvedCharset);
@@ -819,7 +884,7 @@ public class NioExtensions extends DefaultGroovyMethodsSupport {
     private static void appendBuffered(Path file, Object text, String charset, boolean writeBom) throws IOException {
         BufferedWriter writer = null;
         try {
-            boolean shouldWriteBom = writeBom && !file.toFile().exists();
+            boolean shouldWriteBom = writeBom && !Files.exists(file);
             writer = newWriter(file, charset, true);
             if (shouldWriteBom) {
                 writeUTF16BomIfRequired(writer, charset);
@@ -1627,7 +1692,7 @@ public class NioExtensions extends DefaultGroovyMethodsSupport {
      * @since 2.5.0
      */
     public static BufferedWriter newWriter(Path self, String charset, boolean append, boolean writeBom) throws IOException {
-        boolean shouldWriteBom = writeBom && !self.toFile().exists();
+        boolean shouldWriteBom = writeBom && !Files.exists(self);
         if (append) {
             BufferedWriter writer = Files.newBufferedWriter(self, Charset.forName(charset), CREATE, APPEND);
             if (shouldWriteBom) {

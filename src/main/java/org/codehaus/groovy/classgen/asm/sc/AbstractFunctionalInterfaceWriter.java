@@ -22,8 +22,6 @@ import org.codehaus.groovy.ast.ClassHelper;
 import org.codehaus.groovy.ast.ClassNode;
 import org.codehaus.groovy.ast.MethodNode;
 import org.codehaus.groovy.ast.Parameter;
-import org.codehaus.groovy.ast.expr.Expression;
-import org.codehaus.groovy.classgen.asm.BytecodeHelper;
 import org.codehaus.groovy.syntax.RuntimeParserException;
 import org.objectweb.asm.Handle;
 import org.objectweb.asm.Opcodes;
@@ -34,35 +32,26 @@ import java.util.List;
 
 import static org.codehaus.groovy.ast.ClassHelper.getUnwrapper;
 import static org.codehaus.groovy.ast.ClassHelper.getWrapper;
-import static org.codehaus.groovy.transform.stc.StaticTypesMarker.INFERRED_FUNCTIONAL_INTERFACE_TYPE;
-import static org.codehaus.groovy.transform.stc.StaticTypesMarker.PARAMETER_TYPE;
+import static org.codehaus.groovy.ast.ClassHelper.isDynamicTyped;
+import static org.codehaus.groovy.ast.ClassHelper.isPrimitiveType;
+import static org.codehaus.groovy.classgen.asm.BytecodeHelper.getClassInternalName;
+import static org.codehaus.groovy.classgen.asm.BytecodeHelper.getMethodDescriptor;
 
 /**
  * Represents functional interface writer which contains some common methods to complete generating bytecode
  * @since 3.0.0
  */
 public interface AbstractFunctionalInterfaceWriter {
-    String ORIGINAL_PARAMETERS_WITH_EXACT_TYPE = "__ORIGINAL_PARAMETERS_WITH_EXACT_TYPE";
 
-    default ClassNode getFunctionalInterfaceType(Expression expression) {
-        ClassNode type = expression.getNodeMetaData(PARAMETER_TYPE);
+    default String createMethodDescriptor(final MethodNode method) {
+        Class<?> returnType = method.getReturnType().getTypeClass();
+        Class<?>[] parameterTypes = Arrays.stream(method.getParameters())
+                .map(p -> p.getType().getTypeClass()).toArray(Class[]::new);
 
-        if (null == type) {
-            type = expression.getNodeMetaData(INFERRED_FUNCTIONAL_INTERFACE_TYPE);
-        }
-        return type;
+        return getMethodDescriptor(returnType, parameterTypes);
     }
 
-    default String createMethodDescriptor(MethodNode abstractMethodNode) {
-        return BytecodeHelper.getMethodDescriptor(
-                abstractMethodNode.getReturnType().getTypeClass(),
-                Arrays.stream(abstractMethodNode.getParameters())
-                        .map(e -> e.getType().getTypeClass())
-                        .toArray(Class[]::new)
-        );
-    }
-
-    default Handle createBootstrapMethod(boolean isInterface, boolean serializable) {
+    default Handle createBootstrapMethod(final boolean isInterface, final boolean serializable) {
         if (serializable) {
             return new Handle(
                     Opcodes.H_INVOKESTATIC,
@@ -82,35 +71,34 @@ public interface AbstractFunctionalInterfaceWriter {
         );
     }
 
-    default Object[] createBootstrapMethodArguments(final String abstractMethodDesc, final int insn, final ClassNode methodOwner, final MethodNode methodNode, final boolean serializable) {
+    default Object[] createBootstrapMethodArguments(final String abstractMethodDesc, final int insn, final ClassNode methodOwner, final MethodNode methodNode, final Parameter[] parameters, final boolean serializable) {
+        ClassNode returnType = !abstractMethodDesc.endsWith(")V") ? methodNode.getReturnType() : ClassHelper.VOID_TYPE; // GROOVY-10933
         Object[] arguments = !serializable ? new Object[3] : new Object[]{null, null, null, 5, 0};
 
         arguments[0] = Type.getType(abstractMethodDesc);
 
         arguments[1] = new Handle(
                 insn, // H_INVOKESTATIC or H_INVOKEVIRTUAL or H_INVOKEINTERFACE (GROOVY-9853)
-                BytecodeHelper.getClassInternalName(methodOwner.getName()),
+                getClassInternalName(methodOwner.getName()),
                 methodNode.getName(),
-                BytecodeHelper.getMethodDescriptor(methodNode),
+                getMethodDescriptor(methodNode),
                 methodOwner.isInterface());
 
-        arguments[2] = Type.getType(
-                BytecodeHelper.getMethodDescriptor(methodNode.getReturnType(),
-                (Parameter[]) methodNode.getNodeMetaData(ORIGINAL_PARAMETERS_WITH_EXACT_TYPE)));
+        arguments[2] = Type.getType(getMethodDescriptor(returnType, parameters));
 
         return arguments;
     }
 
-    default ClassNode convertParameterType(ClassNode targetType, ClassNode parameterType, ClassNode inferredType) {
+    default ClassNode convertParameterType(final ClassNode targetType, final ClassNode parameterType, final ClassNode inferredType) {
         if (!getWrapper(inferredType).isDerivedFrom(getWrapper(parameterType))) {
             throw new RuntimeParserException("The inferred type[" + inferredType.redirect() + "] is not compatible with the parameter type[" + parameterType.redirect() + "]", parameterType);
         }
 
         ClassNode type;
-        boolean isParameterTypePrimitive = ClassHelper.isPrimitiveType(parameterType);
-        boolean isInferredTypePrimitive = ClassHelper.isPrimitiveType(inferredType);
+        boolean isParameterTypePrimitive = isPrimitiveType(parameterType);
+        boolean isInferredTypePrimitive = isPrimitiveType(inferredType);
         if (!isParameterTypePrimitive && isInferredTypePrimitive) {
-            if (ClassHelper.isDynamicTyped(parameterType) && ClassHelper.isPrimitiveType(targetType) // (1)
+            if (isDynamicTyped(parameterType) && isPrimitiveType(targetType) // (1)
                     || !parameterType.equals(getUnwrapper(parameterType)) && !inferredType.equals(getWrapper(inferredType)) // (2)
             ) {
                 // GROOVY-9790: bootstrap method initialization exception raised when lambda parameter type is wrong
@@ -136,37 +124,33 @@ public interface AbstractFunctionalInterfaceWriter {
      * @deprecated use {@link #convertParameterType(ClassNode, ClassNode, ClassNode)} instead
      */
     @Deprecated
-    default ClassNode convertParameterType(ClassNode parameterType, ClassNode inferredType) {
-        if (!ClassHelper.getWrapper(inferredType.redirect()).isDerivedFrom(ClassHelper.getWrapper(parameterType.redirect()))) {
+    default ClassNode convertParameterType(final ClassNode parameterType, final ClassNode inferredType) {
+        if (!getWrapper(inferredType.redirect()).isDerivedFrom(getWrapper(parameterType.redirect()))) {
             throw new RuntimeParserException("The inferred type[" + inferredType.redirect() + "] is not compatible with the parameter type[" + parameterType.redirect() + "]", parameterType);
         } else {
-            boolean isParameterTypePrimitive = ClassHelper.isPrimitiveType(parameterType);
-            boolean isInferredTypePrimitive = ClassHelper.isPrimitiveType(inferredType);
+            boolean isParameterTypePrimitive = isPrimitiveType(parameterType);
+            boolean isInferredTypePrimitive = isPrimitiveType(inferredType);
             ClassNode type;
             if (!isParameterTypePrimitive && isInferredTypePrimitive) {
-                if (parameterType != ClassHelper.getUnwrapper(parameterType) && inferredType != ClassHelper.getWrapper(inferredType)) {
+                if (parameterType != getUnwrapper(parameterType) && inferredType != getWrapper(inferredType)) {
                     type = inferredType;
                 } else {
-                    type = ClassHelper.getWrapper(inferredType);
+                    type = getWrapper(inferredType);
                 }
             } else if (isParameterTypePrimitive && !isInferredTypePrimitive) {
-                type = ClassHelper.getUnwrapper(inferredType);
+                type = getUnwrapper(inferredType);
             } else {
                 type = inferredType;
             }
-
             return type;
         }
     }
 
-    default Parameter prependParameter(List<Parameter> methodParameterList, String parameterName, ClassNode parameterType) {
+    default Parameter prependParameter(final List<Parameter> parameterList, final String parameterName, final ClassNode parameterType) {
         Parameter parameter = new Parameter(parameterType, parameterName);
-
-        parameter.setOriginType(parameterType);
         parameter.setClosureSharedVariable(false);
-
-        methodParameterList.add(0, parameter);
-
+        parameter.setOriginType(parameterType);
+        parameterList.add(0, parameter);
         return parameter;
     }
 }

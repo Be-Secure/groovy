@@ -18,8 +18,6 @@
  */
 package groovy.transform.stc
 
-import groovy.test.NotYetImplemented
-
 /**
  * Unit tests for static type checking : default groovy methods.
  */
@@ -77,7 +75,7 @@ class DefaultGroovyMethodsSTCTest extends StaticTypeCheckingTestCase {
       '''
     }
 
-    // GROOVY-5568
+    // GROOVY-5568, GROOVY-10815
     void testPropertySemantics1() {
         assertScript '''
             String test(InputStream input) {
@@ -94,6 +92,13 @@ class DefaultGroovyMethodsSTCTest extends StaticTypeCheckingTestCase {
         assertScript '''
             def a = Character.valueOf((char) 'a')
             assert a.letter // DefaultGroovyMethods#isLetter(Character)
+        '''
+
+        assertScript '''
+            class Pogo { String name } // Groovy type
+            Pogo pogo = new Pogo(name:'Frank Grimes')
+            def props = pogo.properties // DefaultGroovyMethods#getProperties(Object)
+            assert props.keySet() == ['name','class'] as Set
         '''
     }
 
@@ -233,7 +238,7 @@ class DefaultGroovyMethodsSTCTest extends StaticTypeCheckingTestCase {
         '''
     }
 
-    @NotYetImplemented // GROOVY-7992
+    // GROOVY-7992
     void testMaxWithComparatorAcceptingSuperclass() {
         assertScript '''
             List<Number> numbers = [1,2,3]

@@ -996,6 +996,31 @@ final class AnnotationTest {
         '''
     }
 
+    @Test
+    void testAnnotationWithRepeatableSupported2() {
+        for (policy in ['CLASS', 'SOURCE']) {
+            assertScript shell, """
+                @Retention(RetentionPolicy.$policy)
+                @Repeatable(B)
+                @interface A {
+                    String value() default "foo"
+                }
+
+                @Retention(RetentionPolicy.$policy)
+                @interface B {
+                }
+
+                @A @A('bar')
+                class C {
+                }
+
+                // not available at run-time
+                assert C.getAnnotationsByType(A).length == 0
+                assert C.getAnnotationsByType(B).length == 0
+            """
+        }
+    }
+
     @Test // GROOVY-9452
     void testDuplicationAnnotationOnClassWithParams() {
         def err = shouldFail shell, '''
@@ -1016,7 +1041,6 @@ final class AnnotationTest {
             @As([@A("c")])
             class Foo {}
         '''
-
         assert err =~ /Cannot specify duplicate annotation/
     }
 
@@ -1102,6 +1126,25 @@ final class AnnotationTest {
                     annos[0].toString()
                 }
             }
+        '''
+    }
+
+    @Test // GROOVY-10857
+    void testAnnotationWithCircularReference() {
+        assertScript shell, '''
+            @A @Documented @Retention(RUNTIME) @Target(TYPE)
+            @interface A {
+            }
+            @A @Documented @Retention(RUNTIME) @Target([FIELD,METHOD,PARAMETER])
+            @interface B {
+            }
+            interface I<T> {
+                @B T m()
+            }
+            def obj = new I<Object>() {
+                def m() { return 0 }
+            }
+            assert obj.m() == 0
         '''
     }
 }

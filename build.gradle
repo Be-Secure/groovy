@@ -18,10 +18,10 @@
  */
 plugins {
     id 'me.champeau.buildscan-recipes' version '0.2.3'
-    id 'com.github.ben-manes.versions' version '0.43.0'
+    id 'com.github.ben-manes.versions' version '0.46.0'
     id 'com.github.blindpirate.osgi' version '0.0.6'
     id "com.github.jk1.dependency-license-report" version "2.1"
-    id 'org.sonarqube' version '3.5.0.2730'
+    id 'org.sonarqube' version '4.0.0.2929'
     id 'org.apache.groovy-core'
     id 'java-test-fixtures'
     id 'org.apache.groovy-jacoco-aggregation'
@@ -85,9 +85,9 @@ dependencies {
     implementation "org.ow2.asm:asm-tree:${versions.asm}"
     implementation "org.ow2.asm:asm-util:${versions.asm}"
     implementation "me.champeau.openbeans:openbeans:${versions.openbeans}"
-    implementation "com.tunnelvisionlabs:antlr4-runtime:${versions.antlr4}"
+    implementation "me.sunlan:antlr4-runtime:${versions.antlr4}"
 
-    antlr "com.tunnelvisionlabs:antlr4:${versions.antlr4}"
+    antlr "me.sunlan:antlr4:${versions.antlr4}"
 
     loggingImplementation "org.fusesource.jansi:jansi:${versions.jansi}"
 
@@ -250,7 +250,7 @@ sonarqube {
     }
 }
 
-def UNSTABLE = /^([\d.-]+(alpha|beta|rc|m)[\d.-]+(groovy[\d.-]+)?|20030203.000550|20031129.200437|2004-03-19)$/
+def UNSTABLE = /^([\d.-]+(alpha|beta|rc|m)[\d.-]+(groovy[\d.-]+)?|20030203.000550|20031129.200437|200404\d\d|2004-03-19)$/
 // ignore non-stable releases
 tasks.named("dependencyUpdates")?.configure {
     gradleReleaseChannel = 'current'
